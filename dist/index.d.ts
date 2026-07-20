@@ -124,7 +124,7 @@ interface ZarrLayerOptions {
      */
     renderPoles?: boolean;
 }
-interface BoundsLike {
+interface BoundsLike$1 {
     getWest(): number;
     getEast(): number;
     toArray(): [number, number][];
@@ -139,7 +139,7 @@ interface MapLike {
     on?(event: string, handler: (...args: unknown[]) => void): void;
     off?(event: string, handler: (...args: unknown[]) => void): void;
     triggerRepaint?(): void;
-    getBounds?(): BoundsLike | null;
+    getBounds?(): BoundsLike$1 | null;
     getZoom?(): number;
     painter?: {
         context?: {
@@ -388,4 +388,19 @@ interface Wgs84Transformer {
  */
 declare function createTransformerTo4326(proj4def: string, bounds: Bounds): Wgs84Transformer;
 
-export { type ColormapArray, type LoadingState, type LoadingStateCallback, type QueryDataValues, type QueryGeometry, type QueryOptions, type QueryResult, type RequestParameters, type Selector, type SpatialDimensions, type TimeMeanResult, type TimeSeriesResult, type TransformRequest, ZarrLayer, type ZarrLayerOptions, createTransformerTo4326 };
+declare function percentileClim(data: ArrayLike<number>, lo?: number, hi?: number): [number, number];
+declare function smartDecimals(min: number, max: number): number;
+declare function collectNumbers(values: QueryDataValues | undefined, fillValue: number, depth?: number): number[];
+declare function getRegionMean(result: QueryResult | null, fillValue: number): number | null;
+type BoundsLike = {
+    toArray: () => [number, number][];
+    getWest: () => number;
+    getEast: () => number;
+    getSouth?: () => number;
+    getNorth?: () => number;
+} | [number, number, number, number];
+declare function boundsToGeometry(bounds: BoundsLike): QueryGeometry;
+
+declare const EODC_COLORMAP: ColormapArray;
+
+export { type ColormapArray, EODC_COLORMAP, type LoadingState, type LoadingStateCallback, type QueryDataValues, type QueryGeometry, type QueryOptions, type QueryResult, type RequestParameters, type Selector, type SpatialDimensions, type TimeMeanResult, type TimeSeriesResult, type TransformRequest, ZarrLayer, type ZarrLayerOptions, boundsToGeometry, collectNumbers, createTransformerTo4326, getRegionMean, percentileClim, smartDecimals };

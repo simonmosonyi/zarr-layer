@@ -8739,9 +8739,146 @@ var ZarrLayer = class {
 
 // src/index.ts
 import { registry } from "zarrita";
+
+// src/viewer-utils.ts
+function percentileClim(data, lo = 0.01, hi = 0.99) {
+  const valid = [];
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i];
+    if (Number.isFinite(v)) valid.push(v);
+  }
+  if (valid.length === 0) return [0, 1];
+  valid.sort((a, b) => a - b);
+  return [
+    valid[Math.floor(lo * valid.length)],
+    valid[Math.ceil(hi * valid.length) - 1]
+  ];
+}
+function smartDecimals(min, max) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return 2;
+  for (let d = 0; d <= 10; d++) {
+    if (min.toFixed(d) !== max.toFixed(d)) return d;
+  }
+  return 10;
+}
+function collectNumbers(values, fillValue, depth = 0) {
+  if (!values) return [];
+  if (depth > 10) return [];
+  if (Array.isArray(values)) {
+    return values.filter(
+      (v) => v !== fillValue && typeof v === "number" && Number.isFinite(v)
+    );
+  }
+  if (typeof values !== "object" || values === null) return [];
+  let results = [];
+  for (const entry of Object.values(values)) {
+    if (entry === values) continue;
+    results = results.concat(
+      collectNumbers(entry, fillValue, depth + 1)
+    );
+  }
+  return results;
+}
+function getRegionMean(result, fillValue) {
+  if (!result) return null;
+  let numbers = [];
+  for (const [key, value] of Object.entries(result)) {
+    if (key === "dimensions" || key === "coordinates") continue;
+    if (!value || typeof value !== "object") continue;
+    try {
+      numbers = numbers.concat(
+        collectNumbers(value, fillValue, 0)
+      );
+    } catch {
+    }
+  }
+  if (numbers.length === 0) return null;
+  return numbers.reduce((acc, v) => acc + v, 0) / numbers.length;
+}
+function clampLat(lat) {
+  return Math.max(-90, Math.min(90, lat));
+}
+function normLng(lng) {
+  const w = ((lng + 180) % 360 + 360) % 360 - 180;
+  return w === -180 ? 180 : w;
+}
+function boundsToGeometry(bounds) {
+  let west, east, south, north;
+  if (Array.isArray(bounds)) {
+    ;
+    [west, south, east, north] = bounds;
+  } else {
+    const arr = bounds.toArray();
+    const [[, swLat], [, neLat]] = arr;
+    south = clampLat(Math.min(swLat, neLat));
+    north = clampLat(Math.max(swLat, neLat));
+    west = normLng(bounds.getWest());
+    east = normLng(bounds.getEast());
+    if (bounds.getSouth) south = clampLat(bounds.getSouth());
+    if (bounds.getNorth) north = clampLat(bounds.getNorth());
+  }
+  south = clampLat(south);
+  north = clampLat(north);
+  west = normLng(west);
+  east = normLng(east);
+  if (east >= west) {
+    return {
+      type: "Polygon",
+      coordinates: [
+        [
+          [west, south],
+          [west, north],
+          [east, north],
+          [east, south],
+          [west, south]
+        ]
+      ]
+    };
+  }
+  return {
+    type: "MultiPolygon",
+    coordinates: [
+      [[[west, south], [west, north], [180, north], [180, south], [west, south]]],
+      [[[-180, south], [-180, north], [east, north], [east, south], [-180, south]]]
+    ]
+  };
+}
+
+// src/eodc-colormap.ts
+var EODC_STOPS = [
+  [8, 58, 89],
+  [60, 190, 224],
+  [160, 215, 231],
+  [185, 209, 214],
+  [209, 163, 107],
+  [216, 140, 80],
+  [168, 146, 85],
+  [139, 108, 50]
+];
+function interpolateStops(stops, count) {
+  return Array.from({ length: count }, (_, i) => {
+    const t = i / (count - 1);
+    const seg = t * (stops.length - 1);
+    const idx = Math.min(Math.floor(seg), stops.length - 2);
+    const f = seg - idx;
+    const [r1, g1, b1] = stops[idx];
+    const [r2, g2, b2] = stops[idx + 1];
+    const r = Math.round(r1 + (r2 - r1) * f);
+    const g = Math.round(g1 + (g2 - g1) * f);
+    const b = Math.round(b1 + (b2 - b1) * f);
+    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+  });
+}
+var EODC_COLORMAP = interpolateStops(EODC_STOPS, 255);
 export {
+  EODC_COLORMAP,
   ZarrLayer,
+  boundsToGeometry,
   registry as codecRegistry,
-  createTransformerTo4326
+  collectNumbers,
+  createTransformerTo4326,
+  getRegionMean,
+  percentileClim,
+  smartDecimals
 };
 //# sourceMappingURL=index.js.map

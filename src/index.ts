@@ -25,3 +25,15 @@ export { createTransformerTo4326 } from './projection-utils'
 
 // Codec registry — re-export for registering custom codecs
 export { registry as codecRegistry } from 'zarrita'
+
+// Viewer utilities — helpers for building UI on top of the layer
+export {
+  percentileClim,
+  smartDecimals,
+  collectNumbers,
+  getRegionMean,
+  boundsToGeometry,
+} from './viewer-utils'
+
+// EODC colormap
+export { EODC_COLORMAP } from './eodc-colormap'
