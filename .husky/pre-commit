@@ -1,3 +1,8 @@
+NODE_MAJOR=$(node -e "console.log(parseInt(process.version.slice(1)))")
+if [ "$NODE_MAJOR" -lt 18 ]; then
+  echo "Node v$NODE_MAJOR: skipping pre-commit hooks (need >=18)"
+  exit 0
+fi
 npm run typecheck
 npx lint-staged
 cd demo && npm run typecheck && npx lint-staged

@@ -38,7 +38,7 @@
     "prepublishOnly": "npm run typecheck && npm run build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "husky"
+    "prepare": "node -e \"process.env.INIT_CWD!==process.cwd()&&process.exit(0)\" && husky"
   },
   "peerDependencies": {
     "mapbox-gl": "*",
