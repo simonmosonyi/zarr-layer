@@ -12,6 +12,7 @@ import type {
 import type { XYLimits } from './map-utils'
 import { DEFAULT_TILE_SIZE } from './constants'
 import { identifyDimensionIndices, resolveOpenFunc } from './zarr-utils'
+import { resolveEqui7GridProj4 } from './projection-utils'
 
 interface PyramidMetadata {
   levels: string[]
@@ -217,19 +218,39 @@ export class ZarrStore {
       this.latIsAscending = latIsAscending
       this._latIsAscendingUserSet = true
     }
-    this.proj4 = proj4 ?? null
+
+    // Handle CRS resolution, including EQUI7GRID codes
     if (crs) {
       const normalized = crs.toUpperCase()
+      // Check if it's an EQUI7GRID code (EPSG:27701-27707)
+      const isEqui7Grid = /^EPSG:277(0[1-7])$/.test(normalized)
+
       if (normalized === 'EPSG:4326' || normalized === 'EPSG:3857') {
         this.crs = normalized
         this._crsOverride = true
-      } else if (!this.proj4) {
+      } else if (isEqui7Grid) {
+        // EQUI7GRID: set crs and auto-resolve to proj4
+        this.crs = normalized as CRS
+        this._crsOverride = true
+        // Auto-resolve EQUI7GRID to proj4 if not explicitly provided
+        if (!proj4) {
+          this.proj4 = resolveEqui7GridProj4(normalized) ?? null
+        } else {
+          this.proj4 = proj4
+        }
+      } else if (!proj4) {
         console.warn(
           `[zarr-layer] CRS "${crs}" requires 'proj4' to render correctly. ` +
             `Falling back to inferred CRS.`
         )
       }
     }
+
+    // Set proj4 if not already set above
+    if (!this.proj4) {
+      this.proj4 = proj4 ?? null
+    }
+
     this.transformRequest = transformRequest
     this.customStore = customStore
 
@@ -363,6 +384,10 @@ export class ZarrStore {
 
   async getArray(): Promise<zarr.Array<zarr.DataType, Readable>> {
     return this._getArray(this.variable)
+  }
+
+  async openArray(key: string): Promise<zarr.Array<zarr.DataType, Readable>> {
+    return this._getArray(key)
   }
 
   /**

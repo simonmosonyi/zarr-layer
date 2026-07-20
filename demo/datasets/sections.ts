@@ -6,32 +6,21 @@ export type SelectorSection = {
 
 export const SELECTOR_SECTIONS: SelectorSection[] = [
   {
-    label: 'Multiscale',
+    label: 'Sentinel-5P',
     description:
-      'Multiscale Zarr stores. Uses the zarr-conventions/multiscales format. See @carbonplan/topozarr for creation.',
-    datasetIds: ['usgs_dem', 'sentinel_2_eopf', 'burn_probability_conus'],
+      'Sentinel-5P TROPOMI daily composites in EQUI7GRID Europe projection (EPSG:27704), 10km resolution.',
+    datasetIds: ['sentinel5p-equi7grid'],
   },
   {
-    label: 'Single Resolution',
-    description: 'Single-resolution datasets. Reprojected if needed.',
-    datasetIds: [
-      'hurricane_florence',
-      'delta_fg_co2',
-      'polar_antarctic',
-      'antarctic_era5',
-      'hrrr_weather',
-    ],
+    label: 'GeoSphere Austria',
+    description:
+      'Gridded meteorological and climate datasets over Austria by GeoSphere Austria in Austria Lambert projection, 1km resolution.',
+    datasetIds: ['inca', 'spartacus'],
   },
   {
-    label: 'Icechunk',
+    label: 'Sentinel-1 ARD',
     description:
-      'Datasets served from Icechunk, a transactional storage engine for Zarr that supports virtual datasets via VirtualiZarr. Uses icechunk-js reader.',
-    datasetIds: ['icechunk_prec'],
-  },
-  {
-    label: 'Legacy Tiled Pyramids',
-    description:
-      'Legacy format. Zarr stores resampled and rechunked to follow slippy-map tile pyramid conventions (zxy). See @carbonplan/ndpyramid for creation.',
-    datasetIds: ['carbonplan_4d', 'temperature_v3', 'tasmax_pyramid_4326'],
+      'Sentinel-1 backscatter datacube (S1-WIZSARD) in EQUI7GRID Europe projection, Austria extent, with 10-level multiscale pyramid.',
+    datasetIds: ['s1-ard-at'],
   },
 ]

@@ -1,23 +1,20 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Spinner } from 'theme-ui'
-import { useThemedColormap, makeColormap } from '@carbonplan/colormaps'
+import { makeColormap, useAppColormap } from '../lib/eodc-colormap'
 import {
   ZarrLayer,
   ZarrLayerOptions,
   QueryGeometry,
 } from '@carbonplan/zarr-layer'
 import maplibregl from 'maplibre-gl'
-import mapboxgl from 'mapbox-gl'
 import { layers, namedFlavor } from '@protomaps/basemaps'
 import { Protocol } from 'pmtiles'
 import { useAppStore } from '../lib/store'
 import type { LayerProps } from '../datasets/types'
 import MapZoomControls, { useAttributionStyles } from './map-controls'
+import { MapTimeMeanColorbar, MapTimeMeanOverlay } from './time-mean-overlay'
+import { TimeSeriesChartOverlay } from './time-series-chart'
 
-export type MapProvider = 'maplibre' | 'mapbox'
-
-// Minimal interface for map methods we use. Using a union of maplibregl.Map | mapboxgl.Map
-// doesn't work because their overloaded on()/off() signatures are incompatible in a union.
 export interface MapInstance {
   on(event: string, handler: (e: any) => void): unknown
   off(event: string, handler: (e: any) => void): unknown
@@ -35,8 +32,6 @@ export interface MapInstance {
   getZoom(): number
   easeTo(options: { center: [number, number]; zoom: number }): void
   getStyle(): { layers?: Array<{ id: string; type: string }> }
-  addSource(id: string, source: any): void
-  setTerrain(terrain: any): void
 }
 
 const backgroundColor = '#1b1e23'
@@ -116,46 +111,6 @@ const mapLibreConfig: MapConfig = {
   getLayerBeforeId: () => 'landuse_pedestrian',
 }
 
-const mapboxConfig: MapConfig = {
-  createMap: (container: HTMLDivElement, globeProjection: boolean) => {
-    if (process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN) {
-      mapboxgl.accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN
-    }
-
-    const map = new mapboxgl.Map({
-      container,
-      style: 'mapbox://styles/mapbox/dark-v11',
-      center: [0, 20],
-      zoom: window.innerWidth < 640 ? 1 : 2,
-      projection: globeProjection ? 'globe' : 'mercator',
-    })
-
-    map.on('load', () => {
-      map.addSource('mapbox-dem', {
-        type: 'raster-dem',
-        url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
-        tileSize: 512,
-        maxzoom: 14,
-      })
-    })
-
-    return map as MapInstance
-  },
-  setProjection: (map: MapInstance, globeProjection: boolean) => {
-    ;(map as mapboxgl.Map).setProjection({
-      name: globeProjection ? 'globe' : 'mercator',
-    } as mapboxgl.ProjectionSpecification)
-  },
-  getLayerBeforeId: (map: MapInstance) => {
-    const styleLayers = (map as mapboxgl.Map).getStyle().layers
-    return styleLayers?.find((layer) => layer.type === 'symbol')?.id
-  },
-}
-
-export const getMapConfig = (provider: MapProvider): MapConfig => {
-  return provider === 'mapbox' ? mapboxConfig : mapLibreConfig
-}
-
 export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
   const zarrLayerRef = useRef<InstanceType<typeof ZarrLayer> | null>(null)
   const prevDatasetIdRef = useRef<string | null>(null)
@@ -165,13 +120,15 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
   const opacity = useAppStore((state) => state.opacity)
   const clim = useAppStore((state) => state.clim)
   const colormap = useAppStore((state) => state.colormap)
-  const mapProvider = useAppStore((state) => state.mapProvider)
-  const renderPoles = useAppStore((state) => state.renderPoles)
   const setLoadingState = useAppStore((state) => state.setLoadingState)
-  const colormapArray = useThemedColormap(colormap, { format: 'hex' })
+  const colormapArray = useAppColormap(colormap, { format: 'hex' })
   const setPointResult = useAppStore((state) => state.setPointResult)
   const setZarrLayer = useAppStore((state) => state.setZarrLayer)
   const hoverQueryEnabled = useAppStore((state) => state.hoverQueryEnabled)
+  const zarrLayerHidden = useAppStore((state) => state.zarrLayerHidden)
+  const setTimeStepsPerDay = useAppStore((state) => state.setTimeStepsPerDay)
+  const setFormatTimeIndex = useAppStore((state) => state.setFormatTimeIndex)
+  const setReverseTimeIndex = useAppStore((state) => state.setReverseTimeIndex)
 
   const layerConfig: LayerProps = useMemo(
     () => datasetModule.buildLayerProps(datasetState),
@@ -181,7 +138,6 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
   useEffect(() => {
     if (!map || !isMapLoaded) return
 
-    const mapConfig = getMapConfig(mapProvider)
     let clickHandler: ((event: any) => void) | null = null
     let cancelled = false
 
@@ -213,7 +169,7 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
         latIsAscending: datasetModule.latIsAscending,
         proj4: datasetModule.proj4,
         onLoadingStateChange: setLoadingState,
-        renderPoles,
+        renderPoles: false,
       }
 
       if (datasetModule.store) {
@@ -241,7 +197,7 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
       const layer = new ZarrLayer(options)
       let beforeId: string | undefined
       try {
-        beforeId = mapConfig.getLayerBeforeId(map)
+        beforeId = mapLibreConfig.getLayerBeforeId(map)
       } catch (e) {}
       map.addLayer(layer, beforeId)
       clickHandler = (event: any) => {
@@ -249,14 +205,75 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
           type: 'Point',
           coordinates: [event.lngLat.lng, event.lngLat.lat],
         }
+        const appState = useAppStore.getState()
         const querySelector = datasetModule.buildLayerProps(
-          useAppStore.getState().datasetState
+          appState.datasetState
         ).selector
 
-        layer.queryData(geometry, querySelector).then((result) => {
-          if (cancelled) return
-          setPointResult(result)
-        })
+        if (appState.timeSeriesModeEnabled) {
+          const timeDim = datasetModule.timeDimension ?? 'time'
+          const { [timeDim]: _t, ...selectorWithoutTime } = querySelector as any
+          const currentTime =
+            typeof appState.datasetState.time === 'number'
+              ? appState.datasetState.time
+              : 0
+          console.log(
+            '[ts-click] timeDim=%s currentTime=%d selector=%o',
+            timeDim,
+            currentTime,
+            selectorWithoutTime
+          )
+          const timeOpts: Record<string, unknown> = {
+            selector: selectorWithoutTime,
+          }
+          const useMeanRange =
+            appState.timeSeriesUseMeanRange &&
+            appState.timeMeanStartDate &&
+            appState.timeMeanEndDate &&
+            appState.reverseTimeIndex
+          if (useMeanRange) {
+            const startIdx = appState.reverseTimeIndex!(
+              appState.timeMeanStartDate!
+            )
+            const endIdx = appState.reverseTimeIndex!(appState.timeMeanEndDate!)
+            if (Number.isFinite(startIdx) && Number.isFinite(endIdx)) {
+              timeOpts.start = Math.max(0, Math.round(startIdx))
+              timeOpts.end = Math.round(endIdx)
+            }
+          } else if (appState.timeSeriesWindow !== 'all') {
+            const windowSteps =
+              appState.timeSeriesWindow * appState.timeStepsPerDay
+            timeOpts.start = Math.max(
+              0,
+              currentTime - Math.floor(windowSteps / 2)
+            )
+            timeOpts.end = currentTime + Math.ceil(windowSteps / 2)
+          }
+          useAppStore.getState().setTimeSeriesLoading(true)
+          const queryPromise = layer.queryTimeSeries(geometry, timeOpts as any)
+          queryPromise
+            .then((result) => {
+              if (cancelled) return
+              console.log(
+                '[ts-click] result values=%d timeIndices=%d',
+                result.values.length,
+                result.timeIndices.length
+              )
+              ;(window as any).__lastTs = result
+              useAppStore.getState().setTimeSeriesResult(result)
+            })
+            .catch((err) => {
+              console.error('[ts-click] queryTimeSeries failed:', err)
+            })
+            .finally(() => {
+              if (!cancelled) useAppStore.getState().setTimeSeriesLoading(false)
+            })
+        } else {
+          layer.queryData(geometry, querySelector).then((result) => {
+            if (cancelled) return
+            setPointResult(result)
+          })
+        }
       }
       map.on('click', clickHandler)
       zarrLayerRef.current = layer
@@ -302,8 +319,6 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
     datasetModule,
     layerConfig.customFrag,
     layerConfig.variable,
-    mapProvider,
-    renderPoles,
     setLoadingState,
   ])
 
@@ -358,10 +373,22 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
   }, [map, isMapLoaded, hoverQueryEnabled, datasetModule, setPointResult])
 
   useEffect(() => {
+    setTimeStepsPerDay(datasetModule.timeStepsPerDay ?? 1)
+    setFormatTimeIndex(datasetModule.formatTimeIndex ?? null)
+    setReverseTimeIndex(datasetModule.reverseTimeIndex ?? null)
+  }, [
+    datasetId,
+    datasetModule,
+    setTimeStepsPerDay,
+    setFormatTimeIndex,
+    setReverseTimeIndex,
+  ])
+
+  useEffect(() => {
     const layer = zarrLayerRef.current
     if (!layer || !map || !isMapLoaded) return
 
-    layer.setOpacity(opacity)
+    layer.setOpacity(zarrLayerHidden ? 0 : opacity)
     layer.setColormap(colormapArray)
     layer.setClim(clim)
 
@@ -370,7 +397,15 @@ export const useMapLayer = (map: MapInstance | null, isMapLoaded: boolean) => {
     if (layerConfig.uniforms && Object.keys(layerConfig.uniforms).length > 0) {
       layer.setUniforms(layerConfig.uniforms)
     }
-  }, [opacity, clim, colormapArray, layerConfig, map, isMapLoaded])
+  }, [
+    opacity,
+    zarrLayerHidden,
+    clim,
+    colormapArray,
+    layerConfig,
+    map,
+    isMapLoaded,
+  ])
 
   return zarrLayerRef
 }
@@ -383,18 +418,19 @@ export const Map = () => {
   const attributionStyles = useAttributionStyles()
 
   const sidebarWidth = useAppStore((state) => state.sidebarWidth)
-  const mapProvider = useAppStore((state) => state.mapProvider)
   const globeProjection = useAppStore((state) => state.globeProjection)
-  const terrainEnabled = useAppStore((state) => state.terrainEnabled)
   const loadingState = useAppStore((state) => state.loadingState)
+  const timeMeanLoading = useAppStore((state) => state.timeMeanLoading)
+  const timeSeriesLoading = useAppStore((state) => state.timeSeriesLoading)
   const setMapInstance = useAppStore((state) => state.setMapInstance)
-
-  const mapConfig = getMapConfig(mapProvider)
 
   useEffect(() => {
     if (!mapContainer.current) return
 
-    const newMap = mapConfig.createMap(mapContainer.current, globeProjection)
+    const newMap = mapLibreConfig.createMap(
+      mapContainer.current,
+      globeProjection
+    )
     mapInstanceRef.current = newMap
 
     newMap.on('load', () => {
@@ -418,23 +454,8 @@ export const Map = () => {
 
   useEffect(() => {
     if (!map || !isMapLoaded) return
-    mapConfig.setProjection(map, globeProjection)
+    mapLibreConfig.setProjection(map, globeProjection)
   }, [map, isMapLoaded, globeProjection])
-
-  // Toggle terrain (Mapbox only - MapLibre doesn't support terrain draping for custom layers)
-  useEffect(() => {
-    if (!map || !isMapLoaded || mapProvider !== 'mapbox') return
-    const mapboxMap = map as mapboxgl.Map
-    try {
-      if (terrainEnabled) {
-        mapboxMap.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 })
-      } else {
-        mapboxMap.setTerrain(null)
-      }
-    } catch (e) {
-      console.warn('Error toggling terrain:', e)
-    }
-  }, [map, isMapLoaded, terrainEnabled, mapProvider])
 
   useMapLayer(map, isMapLoaded)
 
@@ -466,8 +487,13 @@ export const Map = () => {
           left: sidebarWidth ? sidebarWidth + 10 : 2,
         }}
       >
-        {loadingState.loading && <Spinner size={40} />}
+        {(loadingState.loading || timeMeanLoading || timeSeriesLoading) && (
+          <Spinner size={40} />
+        )}
       </Box>
+      <MapTimeMeanOverlay />
+      <MapTimeMeanColorbar />
+      <TimeSeriesChartOverlay />
     </>
   )
 }

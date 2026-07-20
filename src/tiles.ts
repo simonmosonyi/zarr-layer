@@ -1,6 +1,7 @@
 import * as zarr from 'zarrita'
 import { tileToKey, type TileTuple } from './map-utils'
 import type {
+  CRS,
   DimIndicesProps,
   NormalizedSelector,
   SelectorSpec,
@@ -53,7 +54,7 @@ interface TilesOptions {
   coordinates: Record<string, (string | number)[]>
   maxCachedTiles?: number
   bandNames?: string[]
-  crs?: 'EPSG:4326' | 'EPSG:3857'
+  crs?: CRS
   fixedDataScale?: number
 }
 

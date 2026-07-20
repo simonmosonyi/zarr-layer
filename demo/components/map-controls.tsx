@@ -70,18 +70,14 @@ const ZoomButton = ({
   </IconButton>
 )
 
-const ATTRIBUTION_HEIGHT = {
-  maplibre: 35,
-  mapbox: 20,
-}
+const ATTRIBUTION_HEIGHT = 35
 
 const MapZoomControls = () => {
   const mapInstance = useAppStore((state) => state.mapInstance)
-  const mapProvider = useAppStore((state) => state.mapProvider)
 
   if (!mapInstance) return null
 
-  const offset = ATTRIBUTION_HEIGHT[mapProvider] + 10
+  const offset = ATTRIBUTION_HEIGHT + 10
 
   const zoomIn = () => {
     const zoom = mapInstance.getZoom()

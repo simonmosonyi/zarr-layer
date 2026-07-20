@@ -1,0 +1,23 @@
+@font-face {
+  font-family: 'MarkOT';
+  src: url('/fonts/MarkOT.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'MarkOT';
+  src: url('/fonts/MarkOT-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'MarkOT';
+  src: url('/fonts/MarkOT-Italic.otf') format('opentype');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}

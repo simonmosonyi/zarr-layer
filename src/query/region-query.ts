@@ -96,9 +96,12 @@ function transformValue(
   transforms?: QueryTransformOptions
 ): number | null {
   if (!Number.isFinite(value)) return null
+  if (Math.abs(value) > 1e30) return null
 
   if (transforms?.fillValue !== undefined && transforms.fillValue !== null) {
-    if (value === transforms.fillValue) return null
+    const fv = transforms.fillValue
+    if (value === fv) return null
+    if (Math.abs(value - fv) / (Math.abs(fv) || 1) < 1e-4) return null
   }
 
   let result = value
@@ -499,6 +502,14 @@ export function queryRegionUntiled(
     proj4def,
     sourceBounds,
     cachedTransformer
+  )
+  console.log(
+    '[query-debug] queryRegionUntiled: width=%d height=%d proj4=%s sourceBounds=%o pixelGeometry=%o',
+    width,
+    height,
+    !!proj4def,
+    sourceBounds,
+    pixelGeometry
   )
   if (!pixelGeometry) return buildResult()
 

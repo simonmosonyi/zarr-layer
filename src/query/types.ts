@@ -1,4 +1,30 @@
 /**
+ * Result from a pixel-wise temporal mean computation over a time window.
+ */
+export interface TimeMeanResult {
+  variable: string
+  /** Pixel-wise mean values, [height × width] row-major. NaN = fill/missing. Row 0 = south if latIsAscending=true. */
+  data: Float32Array
+  height: number
+  width: number
+  latIsAscending: boolean
+  /** Top-left pixel offset into the full-resolution array. Present when the mean was computed
+   *  over a viewport sub-region rather than the full spatial extent. */
+  pixelOffset?: { x: number; y: number }
+}
+
+/**
+ * Result from a time series query at a point.
+ */
+export interface TimeSeriesResult {
+  variable: string
+  /** Physical values (NaN for fill values / gaps) */
+  values: number[]
+  /** Integer indices into the time axis corresponding to each value */
+  timeIndices: number[]
+}
+
+/**
  * Nested values structure for multi-dimensional data queries.
  */
 export interface NestedValues {

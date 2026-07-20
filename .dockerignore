@@ -1,0 +1,17 @@
+# git
+.git
+.gitignore
+
+# library build artefacts (rebuilt in Docker)
+dist/
+node_modules/
+
+# demo build artefacts (rebuilt in Docker)
+demo/.next/
+demo/node_modules/
+
+# dev / test files
+*.test.ts
+*.spec.ts
+EQUI7GRID_CHANGES.md
+README.md

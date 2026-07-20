@@ -355,9 +355,13 @@ export function computePixelBoundsFromGeometry(
     let minY = Infinity
     let maxY = -Infinity
 
+    const dbgSamples: unknown[] = []
     for (const [lon, lat] of samplePoints) {
       const [srcX, srcY] = transformer.forward(lon, lat)
-      if (!isFinite(srcX) || !isFinite(srcY)) continue
+      if (!isFinite(srcX) || !isFinite(srcY)) {
+        dbgSamples.push({ lon, lat, srcX, srcY, skip: 'non-finite' })
+        continue
+      }
 
       const [xPixel, yPixel] = sourceCRSToPixel(
         srcX,
@@ -367,11 +371,30 @@ export function computePixelBoundsFromGeometry(
         height,
         latIsAscending
       )
+      dbgSamples.push({
+        lon: lon.toFixed(2),
+        lat: lat.toFixed(2),
+        srcX: Math.round(srcX),
+        srcY: Math.round(srcY),
+        xPixel: xPixel.toFixed(1),
+        yPixel: yPixel.toFixed(1),
+      })
       minX = Math.min(minX, xPixel)
       maxX = Math.max(maxX, xPixel)
       minY = Math.min(minY, yPixel)
       maxY = Math.max(maxY, yPixel)
     }
+    console.log(
+      '[query-debug] computePixelBoundsFromGeometry bbox=%o sourceBounds=%o width=%d height=%d latIsAscending=%s samples=%o minX=%s maxX=%s',
+      bbox,
+      sourceBounds,
+      width,
+      height,
+      latIsAscending,
+      dbgSamples,
+      minX.toFixed(1),
+      maxX.toFixed(1)
+    )
 
     // Check if any valid samples were found
     if (

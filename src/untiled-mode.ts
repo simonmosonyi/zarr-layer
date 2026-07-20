@@ -27,6 +27,8 @@ import type {
   QueryResult,
   QueryDataValues,
   NestedValues,
+  TimeMeanResult,
+  TimeSeriesResult,
 } from './query/types'
 import type {
   LoadingStateCallback,
@@ -285,6 +287,15 @@ export class UntiledMode implements ZarrMode {
   private pendingGeometryRebuild: boolean = false
   // Fixed data scale for normalization (set at initialization, passed from ZarrLayer)
   private fixedDataScale: number = 1
+  // Pre-computed mean data for rendering. When set, replaces live data in render.
+  private timeMeanTexture: WebGLTexture | null = null
+  private timeMeanWidth: number = 0
+  private timeMeanHeight: number = 0
+  private timeMeanPixelOffset: { x: number; y: number } = { x: 0, y: 0 }
+  private timeMeanLevelW: number = 0
+  private timeMeanLevelH: number = 0
+  private pendingMeanUpdate: boolean = false
+  private pendingMeanData: TimeMeanResult | null = null
 
   constructor(
     store: ZarrStore,
@@ -363,7 +374,10 @@ export class UntiledMode implements ZarrMode {
         if (this.proj4def) {
           this.mercatorBounds = this.computeMercatorBoundsFromProjection()
         } else {
-          this.mercatorBounds = boundsToMercatorNorm(this.xyLimits, this.crs)
+          this.mercatorBounds = boundsToMercatorNorm(
+            this.xyLimits,
+            this.crs as 'EPSG:4326' | 'EPSG:3857' | null
+          )
         }
       } else {
         console.warn('UntiledMode: No XY limits found')
@@ -1076,7 +1090,11 @@ export class UntiledMode implements ZarrMode {
     // Use cached mercatorBounds if set (from fetchRegion's resampling path),
     // otherwise compute from geoBounds (for non-resampling cases like EPSG:3857)
     const mercBounds =
-      region.mercatorBounds ?? boundsToMercatorNorm(geoBounds, this.crs)
+      region.mercatorBounds ??
+      boundsToMercatorNorm(
+        geoBounds,
+        this.crs as 'EPSG:4326' | 'EPSG:3857' | null
+      )
     region.mercatorBounds = mercBounds
 
     if (this.proj4def && this.cached4326Transformer) {
@@ -2169,10 +2187,105 @@ export class UntiledMode implements ZarrMode {
   ): void {
     const gl = renderer.gl
 
-    // Set up band texture uniforms once per frame
+    // Upload (or clear) the mean texture if setTimeMeanData was called since last render.
+    if (this.pendingMeanUpdate) {
+      if (this.timeMeanTexture) {
+        gl.deleteTexture(this.timeMeanTexture)
+        this.timeMeanTexture = null
+      }
+      const r = this.pendingMeanData
+      if (r && r.data.length > 0) {
+        const { normalized } = normalizeDataForTexture(
+          r.data,
+          null,
+          this.fixedDataScale
+        )
+        const tex = gl.createTexture()!
+        uploadDataTexture(gl, {
+          texture: tex,
+          data: normalized,
+          width: r.width,
+          height: r.height,
+          channels: 1,
+          configured: false,
+        })
+        this.timeMeanTexture = tex
+        this.timeMeanWidth = r.width
+        this.timeMeanHeight = r.height
+        this.timeMeanPixelOffset = r.pixelOffset ?? { x: 0, y: 0 }
+        this.timeMeanLevelW = r.width
+        this.timeMeanLevelH = r.height
+      }
+      this.pendingMeanUpdate = false
+      this.pendingMeanData = null
+    }
+
     setupBandTextureUniforms(gl, shaderProgram, customShaderConfig)
 
-    // Render each loaded region using unified path
+    if (this.timeMeanTexture && this.activeLevel) {
+      const { regionSize } = this.activeLevel
+      const [regionH, regionW] = regionSize
+      const meanW = this.timeMeanWidth
+      const meanH = this.timeMeanHeight
+      const pxOffX = this.timeMeanPixelOffset.x
+      const pxOffY = this.timeMeanPixelOffset.y
+      // Scale region coords from active-level pixel space to mean-level (coarsest)
+      // pixel space. When the mean covers the full coarsest extent (pixelOffset={0,0}),
+      // this normalises coords to [0,1] so texOffset/texScale are level-independent.
+      const scaleX =
+        this.timeMeanLevelW > 0
+          ? this.timeMeanLevelW / this.activeLevel.width
+          : 1
+      const scaleY =
+        this.timeMeanLevelH > 0
+          ? this.timeMeanLevelH / this.activeLevel.height
+          : 1
+
+      for (const region of this.getLoadedRegions()) {
+        const rx0 = region.regionX * regionW
+        const ry0 = region.regionY * regionH
+        const crx0 = rx0 * scaleX
+        const cry0 = ry0 * scaleY
+        const crW = regionW * scaleX
+        const crH = regionH * scaleY
+
+        // Region is outside the mean texture's pixel extent — render live data.
+        const inMeanX = crx0 < pxOffX + meanW && crx0 + crW > pxOffX
+        const inMeanY = cry0 < pxOffY + meanH && cry0 + crH > pxOffY
+        if (!inMeanX || !inMeanY) {
+          renderRegion(
+            gl,
+            shaderProgram,
+            this.regionToRenderable(region, useDirectEcef),
+            worldOffsets,
+            customShaderConfig
+          )
+          continue
+        }
+
+        const renderable = this.regionToRenderable(region, useDirectEcef)
+        renderable.texture = this.timeMeanTexture
+
+        const actualW = Math.min(crW, pxOffX + meanW - crx0)
+        const actualH = Math.min(crH, pxOffY + meanH - cry0)
+        renderable.texOffset = [
+          (crx0 - pxOffX) / meanW,
+          (cry0 - pxOffY) / meanH,
+        ]
+        renderable.texScale = [actualW / meanW, actualH / meanH]
+
+        renderRegion(
+          gl,
+          shaderProgram,
+          renderable,
+          worldOffsets,
+          customShaderConfig
+        )
+      }
+      return
+    }
+
+    // Normal path: render live zarr data.
     for (const region of this.getLoadedRegions()) {
       renderRegion(
         gl,
@@ -2275,6 +2388,10 @@ export class UntiledMode implements ZarrMode {
     cancelAllRequests(this.requestCanceller)
     // Clean up region caches
     this.clearRegionCache(gl)
+    if (this.timeMeanTexture) {
+      gl.deleteTexture(this.timeMeanTexture)
+      this.timeMeanTexture = null
+    }
     this.activeLevel = null
     this.cachedMercatorTransformer = null
     this.cachedWGS84Transformer = null
@@ -2618,15 +2735,32 @@ export class UntiledMode implements ZarrMode {
       pixelBounds: PixelRect,
       opts?: QueryOptions
     ): Promise<QueryResult | null> => {
+      console.log(
+        '[query-debug] runStrip pixelBounds=%o level=%dx%d latIsAscending=%s proj4=%s sourceBounds=%o',
+        pixelBounds,
+        level.width,
+        level.height,
+        this.latIsAscending,
+        !!this.proj4def,
+        sourceBounds
+      )
       const fetched = await this.fetchQueryData(
         level,
         normalizedSelector,
         pixelBounds,
         opts?.signal
       )
+      console.log(
+        '[query-debug] fetchQueryData result: null=%s width=%s height=%s dataLen=%s',
+        !fetched,
+        fetched?.width,
+        fetched?.height,
+        fetched?.data?.length
+      )
       if (!fetched) return null
 
       const subsetBounds = this.computeSubsetBounds(pixelBounds, level)
+      console.log('[query-debug] subsetBounds=%o', subsetBounds)
 
       let subsetSourceBounds: [number, number, number, number] | null = null
       if (this.proj4def && sourceBounds) {
@@ -2653,6 +2787,7 @@ export class UntiledMode implements ZarrMode {
           Math.max(xMin, xMax),
           Math.max(yMin, yMax),
         ]
+        console.log('[query-debug] subsetSourceBounds=%o', subsetSourceBounds)
       }
 
       return queryRegionUntiled(
@@ -2680,6 +2815,16 @@ export class UntiledMode implements ZarrMode {
 
     // Helper for the single-fetch path shared by proj4 and non-crossing cases
     const singleFetch = async (geom: QueryGeometry): Promise<QueryResult> => {
+      console.log(
+        '[query-debug] singleFetch: mercatorBounds=%o level=%dx%d crs=%s latIsAscending=%s proj4=%s sourceBounds=%o',
+        this.mercatorBounds,
+        level.width,
+        level.height,
+        this.crs,
+        this.latIsAscending,
+        !!this.proj4def,
+        sourceBounds
+      )
       const pixelBounds = computePixelBoundsFromGeometry(
         geom,
         this.mercatorBounds!,
@@ -2690,6 +2835,10 @@ export class UntiledMode implements ZarrMode {
         this.proj4def,
         sourceBounds,
         this.cachedWGS84Transformer ?? undefined
+      )
+      console.log(
+        '[query-debug] computePixelBoundsFromGeometry => %o',
+        pixelBounds
       )
       if (!pixelBounds) return emptyResult()
       const result = await runStrip(geom, pixelBounds, options)
@@ -2765,6 +2914,437 @@ export class UntiledMode implements ZarrMode {
       desc.dimIndices
     )
     return mergeQueryResults(westResult, eastResult, this.variable, yDim, xDim)
+  }
+
+  async queryTimeSeries(
+    geometry: QueryGeometry,
+    options?: {
+      timeDimension?: string
+      start?: number
+      end?: number
+      step?: number
+      selector?: Selector
+      signal?: AbortSignal
+      variable?: string
+    }
+  ): Promise<TimeSeriesResult> {
+    const timeDim = options?.timeDimension ?? 'time'
+    const start = options?.start ?? 0
+    const step = options?.step ?? 1
+
+    const empty = (): TimeSeriesResult => ({
+      variable: options?.variable ?? this.variable,
+      values: [],
+      timeIndices: [],
+    })
+
+    const activeLevel = this.activeLevel
+    if (!this.mercatorBounds || !activeLevel) return empty()
+
+    // Use the coarsest level for time-series queries so we always read complete
+    // shards rather than sparse fine-level chunks that may not exist (e.g. S1-ARD
+    // only stores chunk files for time steps with actual acquisitions at fine levels).
+    const coarsestIdx =
+      this.levels.length > 0 ? this.levels.length - 1 : activeLevel.index
+    const coarsestLevelInfo = this.levels[coarsestIdx]
+    const tsBaseArray =
+      coarsestLevelInfo && coarsestIdx !== activeLevel.index
+        ? await this.zarrStore.getLevelArray(coarsestLevelInfo.asset)
+        : activeLevel.zarrArray
+
+    let tsWidth = activeLevel.width
+    let tsHeight = activeLevel.height
+    if (coarsestLevelInfo && coarsestIdx !== activeLevel.index) {
+      for (const [name, info] of Object.entries(this.dimIndices)) {
+        const t = this.classifyDimension(name)
+        if (t === 'lat')
+          tsHeight =
+            (tsBaseArray.shape[info.index] as number | undefined) ?? tsHeight
+        else if (t === 'lon')
+          tsWidth =
+            (tsBaseArray.shape[info.index] as number | undefined) ?? tsWidth
+      }
+    }
+
+    const level: QueryLevelSnapshot = {
+      index: coarsestIdx,
+      zarrArray: tsBaseArray,
+      width: tsWidth,
+      height: tsHeight,
+    }
+
+    const sourceBounds: [number, number, number, number] | null = this.xyLimits
+      ? [
+          this.xyLimits.xMin,
+          this.xyLimits.yMin,
+          this.xyLimits.xMax,
+          this.xyLimits.yMax,
+        ]
+      : null
+
+    const pixelBounds = computePixelBoundsFromGeometry(
+      geometry,
+      this.mercatorBounds,
+      level.width,
+      level.height,
+      this.crs ?? 'EPSG:4326',
+      this.latIsAscending,
+      this.proj4def,
+      sourceBounds,
+      this.cachedWGS84Transformer ?? undefined
+    )
+    console.log('[time-series] pixelBounds=%o', pixelBounds)
+    if (!pixelBounds) return empty()
+
+    const px = Math.max(
+      0,
+      Math.min(Math.floor(pixelBounds.minX), level.width - 1)
+    )
+    const py = Math.max(
+      0,
+      Math.min(Math.floor(pixelBounds.minY), level.height - 1)
+    )
+    console.log(
+      '[time-series] px=%d py=%d level=%dx%d start=%d end=%s',
+      px,
+      py,
+      level.width,
+      level.height,
+      start,
+      options?.end
+    )
+
+    const normalizedSelector = options?.selector
+      ? normalizeSelector(options.selector)
+      : this.selector
+
+    // Build slice args for non-spatial, non-time dims from the selector
+    const { sliceArgs } = await this.buildSliceArgsForSelector(
+      normalizedSelector,
+      {
+        includeSpatialSlices: false,
+        trackMultiValue: false,
+        array: level.zarrArray,
+      }
+    )
+
+    // Override spatial dims with point indices, time dim with a slice
+    let timeAxisLength = 0
+    for (const [name, dimInfo] of Object.entries(this.dimIndices)) {
+      const dimType = this.classifyDimension(name)
+      if (dimType === 'lat') {
+        sliceArgs[dimInfo.index] = py
+      } else if (dimType === 'lon') {
+        sliceArgs[dimInfo.index] = px
+      } else if (dimType === 'time' || name === timeDim) {
+        timeAxisLength = level.zarrArray.shape[dimInfo.index] ?? 0
+        const end = Math.min(options?.end ?? timeAxisLength, timeAxisLength)
+        sliceArgs[dimInfo.index] = zarr.slice(start, end, step)
+      }
+    }
+
+    if (timeAxisLength === 0) return empty()
+
+    // If a different variable is requested, open that array from the store.
+    // We still use level.zarrArray for shape/dim info above (same structure),
+    // but read the actual data from the requested variable's array.
+    let queryArray = level.zarrArray
+    let scaleFactor: number
+    let addOffset: number
+    let fillValue: number | null
+
+    if (options?.variable) {
+      const levelAsset = this.levels[level.index]?.asset
+      const key = levelAsset
+        ? `${levelAsset}/${options.variable}`
+        : options.variable
+      queryArray = await this.zarrStore.openArray(key)
+      const attrs = queryArray.attrs as Record<string, unknown>
+      const rawFill = queryArray.fillValue
+      fillValue =
+        typeof rawFill === 'number'
+          ? rawFill
+          : typeof rawFill === 'string'
+          ? Number(rawFill)
+          : null
+      scaleFactor = (attrs?.scale_factor as number | undefined) ?? 1
+      addOffset = (attrs?.add_offset as number | undefined) ?? 0
+    } else {
+      const desc = this.zarrStore.describe()
+      const currentLevel = this.levels[level.index]
+      scaleFactor = currentLevel?.scaleFactor ?? desc.scaleFactor
+      addOffset = currentLevel?.addOffset ?? desc.addOffset
+      fillValue = currentLevel?.fillValue ?? desc.fill_value
+    }
+
+    console.log(
+      '[time-series] sliceArgs=%o shape=%o variable=%s',
+      sliceArgs,
+      level.zarrArray.shape,
+      options?.variable ?? this.variable
+    )
+
+    const getOpts = options?.signal ? { signal: options.signal } : undefined
+    const result = (await zarr.get(queryArray, sliceArgs, getOpts)) as {
+      data: ArrayLike<number>
+    }
+
+    console.log(
+      '[time-series] scaleFactor=%s addOffset=%s fillValue=%s result.data.length=%d',
+      scaleFactor,
+      addOffset,
+      fillValue,
+      result.data.length
+    )
+    console.log(
+      '[time-series] raw[0..4]=%o',
+      Array.from(result.data).slice(0, 5)
+    )
+
+    const actualEnd = Math.min(options?.end ?? timeAxisLength, timeAxisLength)
+    const count = Math.ceil((actualEnd - start) / step)
+    const timeIndices = Array.from(
+      { length: count },
+      (_, i) => start + i * step
+    )
+
+    const values = Array.from(result.data).map((raw) => {
+      const v = Number(raw)
+      if (!Number.isFinite(v)) return NaN
+      if (Math.abs(v) > 1e30) return NaN
+      if (fillValue !== null) {
+        if (v === fillValue) return NaN
+        if (Math.abs(v - fillValue) / (Math.abs(fillValue) || 1) < 1e-4)
+          return NaN
+      }
+      return v * scaleFactor + addOffset
+    })
+
+    console.log(
+      '[time-series] count=%d timeIndices[0]=%d values[0]=%s values.length=%d',
+      count,
+      timeIndices[0],
+      values[0],
+      values.length
+    )
+
+    return { variable: options?.variable ?? this.variable, values, timeIndices }
+  }
+
+  setTimeMeanData(result: TimeMeanResult | null): void {
+    this.pendingMeanData = result
+    this.pendingMeanUpdate = true
+    this.invalidate()
+  }
+
+  async computeTimeMean(options?: {
+    timeDimension?: string
+    start?: number
+    end?: number
+    step?: number
+    selector?: Selector
+    signal?: AbortSignal
+  }): Promise<TimeMeanResult> {
+    const timeDim = options?.timeDimension ?? 'time'
+    const rawStart = options?.start
+    const start =
+      rawStart != null && Number.isFinite(rawStart)
+        ? Math.max(0, Math.floor(rawStart))
+        : 0
+    const step = options?.step ?? 1
+
+    const empty = (): TimeMeanResult => ({
+      variable: this.variable,
+      data: new Float32Array(0),
+      height: 0,
+      width: 0,
+      latIsAscending: this.latIsAscending,
+    })
+
+    const activeLevel = this.activeLevel
+    if (!activeLevel) return empty()
+
+    // Always use the coarsest level so the pixel count stays small regardless of
+    // zoom level. Fine-level shards can have millions of pixels (e.g. S1-ARD level 2
+    // is 16384×22528); the coarsest level (e.g. level 9 of 10) has orders of magnitude
+    // fewer pixels, keeping fetches fast and the element cap easily satisfied.
+    const coarsestIdx =
+      this.levels.length > 0 ? this.levels.length - 1 : activeLevel.index
+    const coarsestLevelInfo = this.levels[coarsestIdx]
+    const meanBaseArray =
+      coarsestLevelInfo && coarsestIdx !== activeLevel.index
+        ? await this.zarrStore.getLevelArray(coarsestLevelInfo.asset)
+        : activeLevel.zarrArray
+
+    let meanLevelW = activeLevel.width
+    let meanLevelH = activeLevel.height
+    if (coarsestLevelInfo && coarsestIdx !== activeLevel.index) {
+      for (const [name, info] of Object.entries(this.dimIndices)) {
+        const t = this.classifyDimension(name)
+        if (t === 'lat')
+          meanLevelH =
+            (meanBaseArray.shape[info.index] as number | undefined) ??
+            meanLevelH
+        else if (t === 'lon')
+          meanLevelW =
+            (meanBaseArray.shape[info.index] as number | undefined) ??
+            meanLevelW
+      }
+    }
+
+    const level: QueryLevelSnapshot = {
+      index: coarsestIdx,
+      zarrArray: meanBaseArray,
+      width: meanLevelW,
+      height: meanLevelH,
+    }
+
+    const normalizedSelector = options?.selector
+      ? normalizeSelector(options.selector)
+      : this.selector
+
+    const { sliceArgs } = await this.buildSliceArgsForSelector(
+      normalizedSelector,
+      {
+        includeSpatialSlices: true,
+        trackMultiValue: false,
+        array: level.zarrArray,
+      }
+    )
+
+    const pixelOffset = { x: 0, y: 0 }
+
+    // Override the time dim with a slice over [start, end)
+    let timeAxisLength = 0
+    for (const [name, dimInfo] of Object.entries(this.dimIndices)) {
+      const dimType = this.classifyDimension(name)
+      if (dimType === 'time' || name === timeDim) {
+        timeAxisLength = level.zarrArray.shape[dimInfo.index] ?? 0
+        const rawEnd = options?.end
+        const end =
+          rawEnd != null && Number.isFinite(rawEnd)
+            ? Math.min(Math.floor(rawEnd), timeAxisLength)
+            : timeAxisLength
+        sliceArgs[dimInfo.index] = zarr.slice(start, Math.max(start, end), step)
+      }
+    }
+
+    if (timeAxisLength === 0) return empty()
+
+    // Guard against requesting too many elements (exceeds JS typed array or memory limits)
+    const estimatedElements = sliceArgs.reduce((acc: number, arg) => {
+      if (typeof arg === 'number') return acc
+      const s = arg as {
+        start: number | null
+        stop: number | null
+        step: number | null
+      }
+      const n = Math.max(
+        0,
+        Math.ceil(((s.stop ?? 1) - (s.start ?? 0)) / (s.step ?? 1))
+      )
+      return acc * n
+    }, 1)
+    if (estimatedElements > 100_000_000) {
+      throw new Error(
+        `Time mean requires too many data points (${(
+          estimatedElements / 1e6
+        ).toFixed(0)}M). Please specify a date range to limit the computation.`
+      )
+    }
+
+    const getOpts = options?.signal ? { signal: options.signal } : undefined
+    const result = (await zarr.get(level.zarrArray, sliceArgs, getOpts)) as {
+      data: ArrayLike<number>
+      shape: number[]
+    }
+
+    // Determine which output axis corresponds to time, lat, lon.
+    // Entries in dimIndices that have a Slice in sliceArgs contribute one output
+    // axis each, in ascending order of their original array index (dimInfo.index).
+    const sliceEntries = Object.entries(this.dimIndices)
+      .filter(([, dimInfo]) => typeof sliceArgs[dimInfo.index] !== 'number')
+      .sort((a, b) => a[1].index - b[1].index)
+
+    let timeOutAxis = -1
+    let latOutAxis = -1
+    let lonOutAxis = -1
+
+    sliceEntries.forEach(([name, _dimInfo], outAxis) => {
+      const dimType = this.classifyDimension(name)
+      if (dimType === 'time' || name === timeDim) {
+        timeOutAxis = outAxis
+      } else if (dimType === 'lat') {
+        latOutAxis = outAxis
+      } else if (dimType === 'lon') {
+        lonOutAxis = outAxis
+      }
+    })
+
+    if (timeOutAxis === -1 || latOutAxis === -1 || lonOutAxis === -1)
+      return empty()
+
+    // Compute strides from the actual result shape
+    const shape = result.shape
+    const ndim = shape.length
+    const strides = new Array<number>(ndim)
+    strides[ndim - 1] = 1
+    for (let i = ndim - 2; i >= 0; i--) {
+      strides[i] = strides[i + 1] * shape[i + 1]
+    }
+
+    const tLen = shape[timeOutAxis]
+    const height = shape[latOutAxis]
+    const width = shape[lonOutAxis]
+
+    const desc = this.zarrStore.describe()
+    const currentLevel = this.levels[level.index]
+    const scaleFactor = currentLevel?.scaleFactor ?? desc.scaleFactor
+    const addOffset = currentLevel?.addOffset ?? desc.addOffset
+    const fillValue = currentLevel?.fillValue ?? desc.fill_value
+
+    const strideT = strides[timeOutAxis]
+    const strideY = strides[latOutAxis]
+    const strideX = strides[lonOutAxis]
+
+    const sumArr = new Float64Array(height * width)
+    const countArr = new Int32Array(height * width)
+
+    for (let t = 0; t < tLen; t++) {
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const flatIn = t * strideT + y * strideY + x * strideX
+          const raw = Number(result.data[flatIn])
+          if (!Number.isFinite(raw)) continue
+          // Large sentinel values (NetCDF _FillValue ~9.969e+36) may not match the
+          // float64 metadata fill_value exactly due to float32→float64 rounding.
+          if (Math.abs(raw) > 1e30) continue
+          if (fillValue !== null) {
+            if (raw === fillValue) continue
+            if (Math.abs(raw - fillValue) / (Math.abs(fillValue) || 1) < 1e-4)
+              continue
+          }
+          const physical = raw * scaleFactor + addOffset
+          const flatOut = y * width + x
+          sumArr[flatOut] += physical
+          countArr[flatOut]++
+        }
+      }
+    }
+
+    const meanData = new Float32Array(height * width)
+    for (let i = 0; i < meanData.length; i++) {
+      meanData[i] = countArr[i] > 0 ? sumArr[i] / countArr[i] : NaN
+    }
+
+    return {
+      variable: this.variable,
+      data: meanData,
+      height,
+      width,
+      latIsAscending: this.latIsAscending,
+      pixelOffset,
+    }
   }
 }
 

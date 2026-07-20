@@ -23,6 +23,14 @@ export type DatasetConfig = {
   proj4?: string
   /** Optional custom zarrita-compatible store (e.g., IcechunkStore) */
   store?: Promise<zarr.Readable>
+  /** Name of the time dimension in the selector. Defaults to 'time'. */
+  timeDimension?: string
+  /** How many array steps correspond to one calendar day. Used to compute time window sizes. */
+  timeStepsPerDay?: number
+  /** Convert an array index to a display date string. */
+  formatTimeIndex?: (i: number) => string
+  /** Convert a date string back to the nearest array index. */
+  reverseTimeIndex?: (date: string) => number
 }
 
 export type ControlsProps<State> = {

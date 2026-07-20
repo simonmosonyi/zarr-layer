@@ -1,7 +1,23 @@
 import proj4 from 'proj4'
 import type { MercatorBounds } from './map-utils'
-import { WEB_MERCATOR_EXTENT } from './constants'
+import { WEB_MERCATOR_EXTENT, EQUI7GRID_PROJ4 } from './constants'
 import type { Bounds } from './types'
+
+/**
+ * Resolves EQUI7GRID EPSG codes to their proj4 definition strings.
+ * For non-EQUI7GRID codes, returns the input unchanged.
+ *
+ * @param crs - A CRS identifier (e.g., 'EPSG:27704' for Europe)
+ * @returns The proj4 definition string if EQUI7GRID, otherwise the input CRS
+ */
+export function resolveEqui7GridProj4(
+  crs: string | undefined
+): string | undefined {
+  if (!crs || !crs.startsWith('EPSG:')) {
+    return crs
+  }
+  return EQUI7GRID_PROJ4[crs] ?? crs
+}
 
 /**
  * Formats a proj4 error with helpful context.
@@ -183,23 +199,53 @@ export function pixelToSourceCRS(
 /**
  * Creates a transformer for converting WGS84 lat/lon to source CRS.
  * Useful for query coordinate transforms.
+ *
+ * proj4js has a bug in AEQD inverse transform: proj4(aeqd_def,'EPSG:3857').inverse() returns
+ * native AEQD coordinates without the +x_0/+y_0 false easting offset. We detect +proj=aeqd and
+ * apply the offset manually. Other projections (LCC, UTM, …) handle this correctly and need no
+ * correction. The source→Mercator forward direction works correctly for all projection types.
  */
 export function createWGS84ToSourceTransformer(proj4def: string): {
   forward: (lon: number, lat: number) => [number, number]
   inverse: (x: number, y: number) => [number, number]
 } {
-  let converter: proj4.Converter
+  let wgsToMerc: proj4.Converter
+  let srcToMerc: proj4.Converter
   try {
-    converter = proj4('EPSG:4326', proj4def)
+    wgsToMerc = proj4('EPSG:4326', 'EPSG:3857')
+    srcToMerc = proj4(proj4def, 'EPSG:3857')
   } catch (err) {
     throw new Error(formatProj4Error(proj4def, err))
   }
 
+  // proj4js AEQD inverse does not add +x_0/+y_0 false easting/northing; apply manually.
+  // Other projections (LCC, UTM, etc.) are unaffected — their inverse already returns
+  // coordinates in the source CRS with false easting included.
+  const isAeqd = proj4def.includes('+proj=aeqd')
+  const x0 = isAeqd
+    ? parseFloat(proj4def.match(/\+x_0=(-?[\d.]+)/)?.[1] ?? '0') || 0
+    : 0
+  const y0 = isAeqd
+    ? parseFloat(proj4def.match(/\+y_0=(-?[\d.]+)/)?.[1] ?? '0') || 0
+    : 0
+
   return {
-    forward: (lon: number, lat: number) =>
-      converter.forward([lon, lat]) as [number, number],
-    inverse: (x: number, y: number) =>
-      converter.inverse([x, y]) as [number, number],
+    // WGS84 → Mercator → source CRS (AEQD: manually add false easting that proj4js omits)
+    forward: (lon: number, lat: number): [number, number] => {
+      const merc = wgsToMerc.forward([lon, lat]) as [number, number]
+      if (!isFinite(merc[0]) || !isFinite(merc[1])) return [NaN, NaN]
+      try {
+        const [nx, ny] = srcToMerc.inverse(merc) as [number, number]
+        return [nx + x0, ny + y0]
+      } catch {
+        return [NaN, NaN]
+      }
+    },
+    // source CRS → Mercator → WGS84 (forward direction correctly handles false easting)
+    inverse: (x: number, y: number): [number, number] => {
+      const merc = srcToMerc.forward([x, y]) as [number, number]
+      return wgsToMerc.inverse(merc) as [number, number]
+    },
   }
 }
 

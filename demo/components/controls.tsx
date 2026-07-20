@@ -10,10 +10,9 @@ import {
   Input,
   Select,
 } from '@carbonplan/components'
-import { useThemedColormap } from '@carbonplan/colormaps'
-import { Info, RotatingArrow } from '@carbonplan/icons'
-import { Box, Flex, IconButton } from 'theme-ui'
-import { SidebarDivider } from '@carbonplan/layouts'
+import { useAppColormap } from '../lib/eodc-colormap'
+import { RotatingArrow } from '@carbonplan/icons'
+import { Box, Flex, Checkbox, Label } from 'theme-ui'
 import { useAppStore } from '../lib/store'
 import { subheadingSx } from './shared-controls'
 import DatasetBrowser from './dataset-browser'
@@ -22,6 +21,33 @@ import type {
   QueryResult,
   QueryDataValues,
 } from '@carbonplan/zarr-layer'
+import { useTimeMeanOverlay } from './time-mean-overlay'
+
+function percentileClim(
+  data: ArrayLike<number>,
+  lo = 0.01,
+  hi = 0.99
+): [number, number] {
+  const valid: number[] = []
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i]
+    if (Number.isFinite(v)) valid.push(v)
+  }
+  if (valid.length === 0) return [0, 1]
+  valid.sort((a, b) => a - b)
+  return [
+    valid[Math.floor(lo * valid.length)],
+    valid[Math.ceil(hi * valid.length) - 1],
+  ]
+}
+
+function smartDecimals(min: number, max: number): number {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return 2
+  for (let d = 0; d <= 10; d++) {
+    if (min.toFixed(d) !== max.toFixed(d)) return d
+  }
+  return 10
+}
 
 const colormaps = [
   'reds',
@@ -54,6 +80,7 @@ const colormaps = [
   'pinkgrey',
   'rainbow',
   'sinebow',
+  'eodc',
 ]
 
 const VIEWPORT_QUERY_MIN_ZOOM = 6
@@ -92,7 +119,7 @@ export const boundsToGeometry = (bounds: BoundsLike): QueryGeometry => {
     ;[west, south, east, north] = bounds
   } else {
     const arr = bounds.toArray() as [[number, number], [number, number]]
-    const [[swLng, swLat], [neLng, neLat]] = arr
+    const [[, swLat], [, neLat]] = arr
     south = clampLat(Math.min(swLat, neLat))
     north = clampLat(Math.max(swLat, neLat))
     west = normalizeLng(bounds.getWest())
@@ -147,9 +174,6 @@ export const boundsToGeometry = (bounds: BoundsLike): QueryGeometry => {
     ],
   }
 }
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(Math.max(value, min), max)
 
 const collectNumbers = (
   values: QueryDataValues | undefined,
@@ -229,10 +253,6 @@ const Controls = () => {
   const clim = useAppStore((state) => state.clim)
   const colormap = useAppStore((state) => state.colormap)
   const globeProjection = useAppStore((state) => state.globeProjection)
-  const terrainEnabled = useAppStore((state) => state.terrainEnabled)
-  const renderPoles = useAppStore((state) => state.renderPoles)
-  const setRenderPoles = useAppStore((state) => state.setRenderPoles)
-  const mapProvider = useAppStore((state) => state.mapProvider)
   const pointResult = useAppStore((state) => state.pointResult)
   const regionResult = useAppStore((state) => state.regionResult)
   const mapInstance = useAppStore((state) => state.mapInstance)
@@ -277,15 +297,48 @@ const Controls = () => {
   const setClim = useAppStore((state) => state.setClim)
   const setColormap = useAppStore((state) => state.setColormap)
   const setGlobeProjection = useAppStore((state) => state.setGlobeProjection)
-  const setTerrainEnabled = useAppStore((state) => state.setTerrainEnabled)
-  const setMapProvider = useAppStore((state) => state.setMapProvider)
   const setRegionResult = useAppStore((state) => state.setRegionResult)
   const setPointResult = useAppStore((state) => state.setPointResult)
   const hoverQueryEnabled = useAppStore((state) => state.hoverQueryEnabled)
   const setHoverQueryEnabled = useAppStore(
     (state) => state.setHoverQueryEnabled
   )
-  const themedColormap = useThemedColormap(colormap)
+  const timeSeriesResult = useAppStore((state) => state.timeSeriesResult)
+  const timeSeriesModeEnabled = useAppStore(
+    (state) => state.timeSeriesModeEnabled
+  )
+  const setTimeSeriesModeEnabled = useAppStore(
+    (state) => state.setTimeSeriesModeEnabled
+  )
+  const setTimeSeriesResult = useAppStore((state) => state.setTimeSeriesResult)
+  const timeSeriesWindow = useAppStore((state) => state.timeSeriesWindow)
+  const setTimeSeriesWindow = useAppStore((state) => state.setTimeSeriesWindow)
+  const timeSeriesAgg = useAppStore((state) => state.timeSeriesAgg)
+  const setTimeSeriesAgg = useAppStore((state) => state.setTimeSeriesAgg)
+  const timeSeriesUseMeanRange = useAppStore(
+    (state) => state.timeSeriesUseMeanRange
+  )
+  const setTimeSeriesUseMeanRange = useAppStore(
+    (state) => state.setTimeSeriesUseMeanRange
+  )
+  const formatTimeIndex = useAppStore((state) => state.formatTimeIndex)
+  const setTimeMeanEnabled = useAppStore((state) => state.setTimeMeanEnabled)
+  const timeMeanLoading = useAppStore((state) => state.timeMeanLoading)
+  const setTimeMeanLoading = useAppStore((state) => state.setTimeMeanLoading)
+  const timeMeanResult = useAppStore((state) => state.timeMeanResult)
+  const setTimeMeanResult = useAppStore((state) => state.setTimeMeanResult)
+  const timeMeanAutoClim = useAppStore((state) => state.timeMeanAutoClim)
+  const setTimeMeanAutoClim = useAppStore((state) => state.setTimeMeanAutoClim)
+  const timeMeanStartDate = useAppStore((state) => state.timeMeanStartDate)
+  const setTimeMeanStartDate = useAppStore(
+    (state) => state.setTimeMeanStartDate
+  )
+  const timeMeanEndDate = useAppStore((state) => state.timeMeanEndDate)
+  const setTimeMeanEndDate = useAppStore((state) => state.setTimeMeanEndDate)
+  const reverseTimeIndex = useAppStore((state) => state.reverseTimeIndex)
+
+  useTimeMeanOverlay()
+  const themedColormap = useAppColormap(colormap)
   const [queryInFlight, setQueryInFlight] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -293,14 +346,6 @@ const Controls = () => {
     () => datasetModule.buildLayerProps(datasetState),
     [datasetModule, datasetState]
   )
-
-  const isCarbonplan4d = datasetModule.id === 'carbonplan_4d'
-  const currentBand = datasetState['band']
-  const monthStart = Number(datasetState['monthStart']) || null
-  const monthEnd = Number(datasetState['monthEnd']) || null
-  const isRangeBand =
-    isCarbonplan4d &&
-    (currentBand === 'tavg_range' || currentBand === 'prec_range')
 
   useEffect(() => {
     // Abort in-flight query and clear results when switching dataset or selector
@@ -322,46 +367,26 @@ const Controls = () => {
     )
     if (values.length === 0) return null
 
-    // Range bands render with month=[1..12] so queryData caches-hit, but the
-    // displayed average must only cover the user-selected month range.
-    const coordMonths = pointResult.coordinates?.month as number[] | undefined
-    const filtered =
-      isRangeBand &&
-      coordMonths &&
-      coordMonths.length === values.length &&
-      monthStart !== null &&
-      monthEnd !== null
-        ? values.filter(
-            (_, i) => coordMonths[i] >= monthStart && coordMonths[i] <= monthEnd
-          )
-        : values
-
-    if (filtered.length === 0) return null
-    const mean = filtered.reduce((acc, v) => acc + v, 0) / filtered.length
+    if (values.length === 0) return null
+    const mean = values.reduce((acc, v) => acc + v, 0) / values.length
     return Number.isFinite(mean) ? mean : null
-  }, [
-    currentVariable,
-    fillValue,
-    pointResult,
-    isRangeBand,
-    monthStart,
-    monthEnd,
-  ])
+  }, [currentVariable, fillValue, pointResult])
 
   const regionMean = useMemo(
     () => getRegionMean(regionResult, fillValue),
     [regionResult, fillValue]
   )
 
-  const [terrainInfo, setTerrainInfo] = useState(false)
-  const [renderPolesInfo, setRenderPolesInfo] = useState(false)
-  const [climInputs, setClimInputs] = useState<[string, string]>([
-    String(clim[0]),
-    String(clim[1]),
-  ])
+  const [autoScaling, setAutoScaling] = useState(false)
+  const [timeMeanError, setTimeMeanError] = useState<string | null>(null)
+  const [climInputs, setClimInputs] = useState<[string, string]>(() => {
+    const d = smartDecimals(clim[0], clim[1])
+    return [clim[0].toFixed(d), clim[1].toFixed(d)]
+  })
 
   useEffect(() => {
-    setClimInputs([String(clim[0]), String(clim[1])])
+    const d = smartDecimals(clim[0], clim[1])
+    setClimInputs([clim[0].toFixed(d), clim[1].toFixed(d)])
   }, [clim])
 
   const commitClimInput = (index: 0 | 1, value?: string) => {
@@ -404,6 +429,47 @@ const Controls = () => {
     setClim([lo, hi])
   }
 
+  const handleComputeMean = async () => {
+    if (!zarrLayer || timeMeanLoading) return
+    const { selector: querySelector } = layerConfig
+    const timeDim = datasetModule.timeDimension ?? 'time'
+    const { [timeDim]: _t, ...selectorWithoutTime } = querySelector as any
+    const timeOpts: Record<string, unknown> = { selector: selectorWithoutTime }
+    console.log(
+      '[time-mean] startDate=%s endDate=%s reverseTimeIndex=%s',
+      timeMeanStartDate,
+      timeMeanEndDate,
+      !!reverseTimeIndex
+    )
+    if (timeMeanStartDate && timeMeanEndDate && reverseTimeIndex) {
+      const startIdx = reverseTimeIndex(timeMeanStartDate)
+      const endIdx = reverseTimeIndex(timeMeanEndDate)
+      console.log('[time-mean] startIdx=%d endIdx=%d', startIdx, endIdx)
+      if (Number.isFinite(startIdx) && Number.isFinite(endIdx)) {
+        timeOpts.start = Math.max(0, Math.round(startIdx))
+        timeOpts.end = Math.round(endIdx)
+      }
+    }
+    console.log('[time-mean] calling computeTimeMean with opts=%o', timeOpts)
+    setTimeMeanLoading(true)
+    setTimeMeanEnabled(true)
+    setTimeMeanError(null)
+    try {
+      const result = await (zarrLayer as any).computeTimeMean(timeOpts)
+      ;(zarrLayer as any).setTimeMeanData(result)
+      setTimeMeanResult(result)
+      if (timeMeanAutoClim && result.data.length > 0) {
+        setClim(percentileClim(result.data))
+      }
+    } catch (e) {
+      console.error('Time mean failed', e)
+      setTimeMeanResult(null)
+      setTimeMeanError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setTimeMeanLoading(false)
+    }
+  }
+
   const handleViewportQuery = async () => {
     if (viewportQueryDisabled || queryInFlight) return
     if (!mapInstance || !zarrLayer || !mapInstance.getBounds) return
@@ -420,17 +486,7 @@ const Controls = () => {
         throw new Error('Viewport query is not available')
       }
       const geometry = boundsToGeometry(bounds)
-      // If in range mode, query only the selected month range
-      let querySelector = layerConfig.selector
-      if (isRangeBand && monthStart !== null && monthEnd !== null) {
-        const monthRange: number[] = []
-        for (let m = monthStart; m <= monthEnd; m++) {
-          monthRange.push(m)
-        }
-        // Get the base band (tavg or prec) from current selection
-        const baseBand = currentBand === 'tavg_range' ? 'tavg' : 'prec'
-        querySelector = { band: baseBand, month: monthRange }
-      }
+      const querySelector = layerConfig.selector
 
       const result = (await zarrLayer.queryData(geometry, querySelector, {
         signal: controller.signal,
@@ -446,13 +502,112 @@ const Controls = () => {
     }
   }
 
+  const handleAutoScale = async () => {
+    console.log(
+      '[auto-scale] triggered, autoScaling=%s zarrLayer=%s timeMeanResult=%s zoomLevel=%s',
+      autoScaling,
+      !!zarrLayer,
+      !!timeMeanResult,
+      zoomLevel
+    )
+    if (autoScaling || !zarrLayer) {
+      console.log(
+        '[auto-scale] early exit: autoScaling=%s zarrLayer=%s',
+        autoScaling,
+        !!zarrLayer
+      )
+      return
+    }
+
+    // If time mean is displayed, use its data directly
+    if (timeMeanResult) {
+      const [lo, hi] = percentileClim(timeMeanResult.data)
+      console.log(
+        '[auto-scale] source=timeMean samples=%d p1=%f p99=%f',
+        timeMeanResult.data.length,
+        lo,
+        hi
+      )
+      setClim([lo, hi])
+      return
+    }
+
+    // Otherwise query current viewport — no zoom restriction, unlike the manual region query
+    console.log(
+      '[auto-scale] no timeMean, trying viewport: mapInstance=%s getBounds=%s',
+      !!mapInstance,
+      !!mapInstance?.getBounds
+    )
+    if (!mapInstance || !mapInstance.getBounds) {
+      console.log('[auto-scale] early exit: no mapInstance or getBounds')
+      return
+    }
+    setAutoScaling(true)
+    try {
+      const bounds = mapInstance.getBounds()
+      console.log('[auto-scale] bounds=%o', bounds?.toArray?.())
+      if (!bounds) {
+        console.log('[auto-scale] early exit: no bounds')
+        return
+      }
+      const geometry = boundsToGeometry(bounds)
+      console.log(
+        '[auto-scale] source=viewport querying... selector=%o variable=%s',
+        layerConfig.selector,
+        currentVariable
+      )
+      const result = (await zarrLayer.queryData(
+        geometry,
+        layerConfig.selector,
+        {
+          includeSpatialCoordinates: false,
+        }
+      )) as QueryResult
+      console.log(
+        '[auto-scale] query result keys=%o currentVariable=%s fillValue=%s',
+        Object.keys(result),
+        currentVariable,
+        fillValue
+      )
+      console.log(
+        '[auto-scale] result[currentVariable]=%o',
+        result[currentVariable]
+      )
+      const numbers = collectNumbers(
+        result[currentVariable] as QueryDataValues,
+        fillValue
+      )
+      if (numbers.length > 0) {
+        const [lo, hi] = percentileClim(numbers)
+        console.log(
+          '[auto-scale] source=viewport samples=%d p1=%f p99=%f',
+          numbers.length,
+          lo,
+          hi
+        )
+        setClim([lo, hi])
+      } else {
+        console.log(
+          '[auto-scale] source=viewport no valid samples found — raw value count before filter=%d',
+          Array.isArray(result[currentVariable])
+            ? (result[currentVariable] as unknown[]).length
+            : '(not array)'
+        )
+      }
+    } catch (e) {
+      console.error('[auto-scale] error', e)
+    } finally {
+      setAutoScaling(false)
+    }
+  }
+
   return (
     <Box>
       <Box sx={headingSx}>Dataset</Box>
 
       <DatasetBrowser />
 
-      <SidebarDivider sx={{ my: 3 }} />
+      <Box sx={{ height: '1px', bg: '#45505D', my: 3 }} />
 
       <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
         <Column start={1} width={4}>
@@ -549,7 +704,238 @@ const Controls = () => {
         </Column>
       </Row>
 
-      <SidebarDivider sx={{ my: 3 }} />
+      <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline', mt: 2 }}>
+        <Column start={1} width={1}>
+          <Box sx={subheadingSx}>Time Series</Box>
+        </Column>
+        <Column start={2} width={3}>
+          <Flex sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <Box sx={{ fontSize: 0, color: 'secondary' }}>
+              {timeSeriesModeEnabled &&
+                timeSeriesResult === null &&
+                'click map'}
+            </Box>
+            <Filter
+              values={{
+                on: timeSeriesModeEnabled,
+                off: !timeSeriesModeEnabled,
+              }}
+              setValues={(obj: Record<string, boolean>) => {
+                if (obj.off) {
+                  setTimeSeriesModeEnabled(false)
+                  setTimeSeriesResult(null)
+                }
+                if (obj.on) setTimeSeriesModeEnabled(true)
+              }}
+            />
+          </Flex>
+        </Column>
+      </Row>
+      {timeSeriesModeEnabled && (
+        <>
+          {formatTimeIndex && timeMeanStartDate && timeMeanEndDate && (
+            <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
+              <Column start={1} width={1}>
+                <Box sx={subheadingSx}>Range</Box>
+              </Column>
+              <Column start={2} width={3}>
+                <Filter
+                  values={{
+                    window: !timeSeriesUseMeanRange,
+                    'mean range': timeSeriesUseMeanRange,
+                  }}
+                  setValues={(obj: Record<string, boolean>) => {
+                    if (obj.window) setTimeSeriesUseMeanRange(false)
+                    if (obj['mean range']) setTimeSeriesUseMeanRange(true)
+                  }}
+                />
+              </Column>
+            </Row>
+          )}
+          <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
+            <Column start={1} width={1}>
+              <Box sx={subheadingSx}>Aggregate</Box>
+            </Column>
+            <Column start={2} width={3}>
+              <Filter
+                values={{
+                  none: timeSeriesAgg === 'none',
+                  monthly: timeSeriesAgg === 'monthly',
+                  yearly: timeSeriesAgg === 'yearly',
+                }}
+                setValues={(obj: Record<string, boolean>) => {
+                  if (obj.none) {
+                    setTimeSeriesAgg('none')
+                    setTimeSeriesWindow(30)
+                  }
+                  if (obj.monthly) {
+                    setTimeSeriesAgg('monthly')
+                    setTimeSeriesWindow(365)
+                  }
+                  if (obj.yearly) {
+                    setTimeSeriesAgg('yearly')
+                    setTimeSeriesWindow('all')
+                  }
+                }}
+              />
+            </Column>
+          </Row>
+          {!timeSeriesUseMeanRange && timeSeriesAgg !== 'yearly' && (
+            <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
+              <Column start={1} width={1}>
+                <Box sx={subheadingSx}>Window</Box>
+              </Column>
+              <Column start={2} width={3}>
+                {timeSeriesAgg === 'none' ? (
+                  <Filter
+                    values={{
+                      '1w': timeSeriesWindow === 7,
+                      '2w': timeSeriesWindow === 14,
+                      '1m': timeSeriesWindow === 30,
+                      '3m': timeSeriesWindow === 90,
+                      '6m': timeSeriesWindow === 180,
+                      '1y': timeSeriesWindow === 365,
+                    }}
+                    setValues={(obj: Record<string, boolean>) => {
+                      if (obj['1w']) setTimeSeriesWindow(7)
+                      if (obj['2w']) setTimeSeriesWindow(14)
+                      if (obj['1m']) setTimeSeriesWindow(30)
+                      if (obj['3m']) setTimeSeriesWindow(90)
+                      if (obj['6m']) setTimeSeriesWindow(180)
+                      if (obj['1y']) setTimeSeriesWindow(365)
+                    }}
+                  />
+                ) : (
+                  <Filter
+                    values={{
+                      '3m': timeSeriesWindow === 90,
+                      '1y': timeSeriesWindow === 365,
+                      '5y': timeSeriesWindow === 1825,
+                      all: timeSeriesWindow === 'all',
+                    }}
+                    setValues={(obj: Record<string, boolean>) => {
+                      if (obj['3m']) setTimeSeriesWindow(90)
+                      if (obj['1y']) setTimeSeriesWindow(365)
+                      if (obj['5y']) setTimeSeriesWindow(1825)
+                      if (obj.all) setTimeSeriesWindow('all')
+                    }}
+                  />
+                )}
+              </Column>
+            </Row>
+          )}
+        </>
+      )}
+
+      <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline', mt: 2 }}>
+        <Column start={1} width={1}>
+          <Box sx={subheadingSx}>Time Mean</Box>
+        </Column>
+        <Column start={2} width={3}>
+          <Flex sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <Flex sx={{ alignItems: 'center', gap: 2 }}>
+              {timeMeanResult !== null && (
+                <Box
+                  as='span'
+                  onClick={() => {
+                    ;(zarrLayer as any)?.setTimeMeanData(null)
+                    setTimeMeanResult(null)
+                    setTimeMeanEnabled(false)
+                  }}
+                  sx={{
+                    cursor: 'pointer',
+                    fontSize: 0,
+                    color: 'secondary',
+                    '&:hover': { color: 'primary' },
+                  }}
+                >
+                  ✕ clear
+                </Box>
+              )}
+            </Flex>
+            <Button
+              onClick={handleComputeMean}
+              suffix={<RotatingArrow />}
+              size='xs'
+              disabled={!zarrLayer || timeMeanLoading}
+              sx={{ fontSize: 2 }}
+            >
+              {timeMeanLoading ? 'Computing…' : 'Compute mean'}
+            </Button>
+          </Flex>
+          {timeMeanError && (
+            <Box sx={{ fontSize: 0, color: 'red', mt: 1 }}>{timeMeanError}</Box>
+          )}
+        </Column>
+      </Row>
+      <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'center', mt: 1 }}>
+        <Column start={1} width={3}>
+          <Box sx={subheadingSx}>Auto-scale colormap</Box>
+        </Column>
+        <Column start={4} width={1}>
+          <Label
+            sx={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              cursor: 'pointer',
+              mb: 0,
+            }}
+          >
+            <Checkbox
+              checked={timeMeanAutoClim}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setTimeMeanAutoClim(e.target.checked)
+              }
+            />
+          </Label>
+        </Column>
+      </Row>
+
+      {formatTimeIndex && (
+        <>
+          <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline', mt: 1 }}>
+            <Column start={1} width={1}>
+              <Box sx={subheadingSx}>From</Box>
+            </Column>
+            <Column start={2} width={3}>
+              <Input
+                type='date'
+                size='xs'
+                value={timeMeanStartDate ?? ''}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTimeMeanStartDate(e.target.value || null)
+                }
+              />
+            </Column>
+          </Row>
+          <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline', mt: 1 }}>
+            <Column start={1} width={1}>
+              <Box sx={subheadingSx}>To</Box>
+            </Column>
+            <Column start={2} width={3}>
+              <Input
+                type='date'
+                size='xs'
+                value={timeMeanEndDate ?? ''}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTimeMeanEndDate(e.target.value || null)
+                }
+              />
+            </Column>
+          </Row>
+          <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
+            <Column start={1} width={3}>
+              <Box sx={{ fontSize: 0, color: 'secondary', mt: 1 }}>
+                {timeMeanStartDate && timeMeanEndDate
+                  ? `${timeMeanStartDate} → ${timeMeanEndDate}`
+                  : 'Averaging full dataset'}
+              </Box>
+            </Column>
+          </Row>
+        </>
+      )}
+
+      <Box sx={{ height: '1px', bg: '#45505D', my: 3 }} />
 
       <Row columns={[4, 4, 4, 4]}>
         <Column start={1} width={4}>
@@ -622,6 +1008,21 @@ const Controls = () => {
       </Row>
 
       <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
+        <Column start={2} width={3}>
+          <Flex sx={{ justifyContent: 'flex-end' }}>
+            <Button
+              onClick={handleAutoScale}
+              size='xs'
+              disabled={autoScaling || !zarrLayer}
+              sx={{ fontSize: 2 }}
+            >
+              {autoScaling ? 'Scaling…' : 'Auto scale (p1–p99)'}
+            </Button>
+          </Flex>
+        </Column>
+      </Row>
+
+      <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
         <Column start={1} width={1}>
           <Box sx={subheadingSx}>Opacity</Box>
         </Column>
@@ -641,27 +1042,9 @@ const Controls = () => {
         </Column>
       </Row>
 
-      <SidebarDivider sx={{ my: 3 }} />
+      <Box sx={{ height: '1px', bg: '#45505D', my: 3 }} />
 
       <Box sx={headingSx}>Map</Box>
-
-      <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
-        <Column start={1} width={1} sx={subheadingSx}>
-          provider
-        </Column>
-        <Column start={2} width={3}>
-          <Filter
-            values={{
-              maplibre: mapProvider === 'maplibre',
-              mapbox: mapProvider === 'mapbox',
-            }}
-            setValues={(obj: Record<string, boolean>) => {
-              if (obj.maplibre) setMapProvider('maplibre')
-              if (obj.mapbox) setMapProvider('mapbox')
-            }}
-          />
-        </Column>
-      </Row>
 
       <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
         <Column start={1} width={1} sx={subheadingSx}>
@@ -677,125 +1060,6 @@ const Controls = () => {
           />
         </Column>
       </Row>
-
-      {mapProvider === 'mapbox' && (
-        <>
-          <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
-            <Column start={1} width={1} sx={subheadingSx}>
-              Terrain
-            </Column>
-            <Column start={2} width={3}>
-              <Flex sx={{ alignItems: 'center', gap: 2 }}>
-                <Filter
-                  values={{ on: terrainEnabled, off: !terrainEnabled }}
-                  setValues={(obj: Record<string, boolean>) => {
-                    if (obj.off) setTerrainEnabled(false)
-                    if (obj.on) {
-                      setTerrainEnabled(true)
-                      setRenderPoles(false)
-                    }
-                  }}
-                />
-                <IconButton
-                  onClick={() => setTerrainInfo(!terrainInfo)}
-                  aria-label='More information'
-                  aria-expanded={terrainInfo}
-                  sx={{
-                    cursor: 'pointer',
-                    width: '16px',
-                    height: '16px',
-                    p: 0,
-                    flexShrink: 0,
-                    '&:hover > #terrain-info': { stroke: 'primary' },
-                  }}
-                >
-                  <Info
-                    id='terrain-info'
-                    height='16px'
-                    width='16px'
-                    sx={{
-                      stroke: terrainInfo ? 'primary' : 'secondary',
-                      transition: '0.1s',
-                    }}
-                  />
-                </IconButton>
-              </Flex>
-            </Column>
-          </Row>
-          {terrainInfo && (
-            <Box
-              sx={{
-                fontSize: 2,
-                color: 'secondary',
-                mt: 1,
-                mb: 2,
-                fontFamily: 'body',
-              }}
-            >
-              Drapes the zarr layer over Mapbox 3D terrain. Incompatible with
-              render poles. Mapbox only.
-            </Box>
-          )}
-
-          <Row columns={[4, 4, 4, 4]} sx={{ alignItems: 'baseline' }}>
-            <Column start={1} width={1} sx={subheadingSx}>
-              Render poles
-            </Column>
-            <Column start={2} width={3}>
-              <Flex sx={{ alignItems: 'center', gap: 2 }}>
-                <Filter
-                  values={{ on: renderPoles, off: !renderPoles }}
-                  setValues={(obj: Record<string, boolean>) => {
-                    if (obj.off) setRenderPoles(false)
-                    if (obj.on) {
-                      setRenderPoles(true)
-                      setTerrainEnabled(false)
-                    }
-                  }}
-                />
-                <IconButton
-                  onClick={() => setRenderPolesInfo(!renderPolesInfo)}
-                  aria-label='More information'
-                  aria-expanded={renderPolesInfo}
-                  sx={{
-                    cursor: 'pointer',
-                    width: '16px',
-                    height: '16px',
-                    p: 0,
-                    flexShrink: 0,
-                    '&:hover > #render-poles-info': { stroke: 'primary' },
-                  }}
-                >
-                  <Info
-                    id='render-poles-info'
-                    height='16px'
-                    width='16px'
-                    sx={{
-                      stroke: renderPolesInfo ? 'primary' : 'secondary',
-                      transition: '0.1s',
-                    }}
-                  />
-                </IconButton>
-              </Flex>
-            </Column>
-          </Row>
-          {renderPolesInfo && (
-            <Box
-              sx={{
-                fontSize: 2,
-                color: 'secondary',
-                mt: 1,
-                mb: 2,
-                fontFamily: 'body',
-              }}
-            >
-              Experimental direct ECEF rendering that avoids the visible polar
-              gap from Web Mercator clipping. Incompatible with terrain. Toggle
-              impacts Mapbox only: Maplibre renders to the poles by default
-            </Box>
-          )}
-        </>
-      )}
     </Box>
   )
 }

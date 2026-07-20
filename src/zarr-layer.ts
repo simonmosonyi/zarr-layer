@@ -39,7 +39,13 @@ import {
   isGlobeProjection as checkGlobeProjection,
 } from './map-utils'
 import { MAPBOX_IDENTITY_MATRIX } from './mapbox-utils'
-import type { QueryGeometry, QueryOptions, QueryResult } from './query/types'
+import type {
+  QueryGeometry,
+  QueryOptions,
+  QueryResult,
+  TimeSeriesResult,
+  TimeMeanResult,
+} from './query/types'
 import { SPATIAL_DIM_NAMES } from './constants'
 
 type MapboxInternals = {
@@ -677,7 +683,10 @@ export class ZarrLayer {
             this.normalizedSelector[dimName] = { selected: 0 }
           }
         } catch (err) {
-          console.warn(`Failed to load dimension values for ${dimName}:`, err)
+          // NotFoundError is expected when a dimension has no coordinate array
+          if (!(err instanceof Error && err.name === 'NotFoundError')) {
+            console.warn(`Failed to load dimension values for ${dimName}:`, err)
+          }
         }
       }
     }
@@ -911,5 +920,48 @@ export class ZarrLayer {
       }
     }
     return this.mode.queryData(geometry, selector, options)
+  }
+
+  async queryTimeSeries(
+    geometry: QueryGeometry,
+    options?: {
+      timeDimension?: string
+      start?: number
+      end?: number
+      step?: number
+      selector?: Selector
+      signal?: AbortSignal
+      variable?: string
+    }
+  ): Promise<TimeSeriesResult> {
+    if (!this.mode?.queryTimeSeries) {
+      return { variable: this.variable, values: [], timeIndices: [] }
+    }
+    return this.mode.queryTimeSeries(geometry, options)
+  }
+
+  setTimeMeanData(result: TimeMeanResult | null): void {
+    this.mode?.setTimeMeanData?.(result)
+    this.invalidate()
+  }
+
+  async computeTimeMean(options?: {
+    timeDimension?: string
+    start?: number
+    end?: number
+    step?: number
+    selector?: Selector
+    signal?: AbortSignal
+  }): Promise<TimeMeanResult> {
+    if (!this.mode?.computeTimeMean) {
+      return {
+        variable: this.variable,
+        data: new Float32Array(0),
+        height: 0,
+        width: 0,
+        latIsAscending: true,
+      }
+    }
+    return this.mode.computeTimeMean(options)
   }
 }

@@ -107,8 +107,9 @@ export interface ZarrLayerOptions {
    */
   bounds?: Bounds
   /**
-   * CRS identifier for built-in projections (EPSG:4326 or EPSG:3857).
-   * For any other CRS, provide a matching proj4 definition.
+   * CRS identifier for built-in projections (EPSG:4326, EPSG:3857) or EQUI7GRID continental zones.
+   * EQUI7GRID codes (EPSG:27701-27707) are automatically resolved to their proj4 definitions.
+   * For other custom CRS, optionally provide a matching proj4 definition.
    */
   crs?: string
   latIsAscending?: boolean | null
@@ -147,7 +148,16 @@ export interface ZarrLayerOptions {
   renderPoles?: boolean
 }
 
-export type CRS = 'EPSG:4326' | 'EPSG:3857'
+export type CRS =
+  | 'EPSG:4326'
+  | 'EPSG:3857'
+  | 'EPSG:27701' // EQUI7GRID Africa
+  | 'EPSG:27702' // EQUI7GRID Antarctica
+  | 'EPSG:27703' // EQUI7GRID Asia
+  | 'EPSG:27704' // EQUI7GRID Europe
+  | 'EPSG:27705' // EQUI7GRID North America
+  | 'EPSG:27706' // EQUI7GRID Oceania
+  | 'EPSG:27707' // EQUI7GRID South America
 
 // Untiled multiscale types (zarr-conventions/multiscales format)
 export interface UntiledLevel {

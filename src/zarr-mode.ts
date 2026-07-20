@@ -14,7 +14,13 @@ import type {
   RendererUniforms,
 } from './renderer-types'
 import type { ZarrRenderer } from './zarr-renderer'
-import type { QueryGeometry, QueryOptions, QueryResult } from './query/types'
+import type {
+  QueryGeometry,
+  QueryOptions,
+  QueryResult,
+  TimeMeanResult,
+  TimeSeriesResult,
+} from './query/types'
 
 export interface RenderContext {
   gl: WebGL2RenderingContext
@@ -98,4 +104,25 @@ export interface ZarrMode {
     selector?: Selector,
     options?: QueryOptions
   ): Promise<QueryResult>
+  queryTimeSeries?(
+    geometry: QueryGeometry,
+    options?: {
+      timeDimension?: string
+      start?: number
+      end?: number
+      step?: number
+      selector?: Selector
+      signal?: AbortSignal
+      variable?: string
+    }
+  ): Promise<TimeSeriesResult>
+  computeTimeMean?(options?: {
+    timeDimension?: string
+    start?: number
+    end?: number
+    step?: number
+    selector?: Selector
+    signal?: AbortSignal
+  }): Promise<TimeMeanResult>
+  setTimeMeanData?(result: TimeMeanResult | null): void
 }

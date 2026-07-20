@@ -14,7 +14,7 @@ See the [demo](https://zarr-layer.demo.carbonplan.org/) for a quick tour of capa
 
 ## data requirements
 
-Supports v2 and v3 zarr stores via [zarrita](https://github.com/manzt/zarrita.js). Arbitrary CRS support via [proj4](https://github.com/proj4js/proj4js) reprojection for 'untiled' data. Tiled data need to be in EPSG:4326 or EPSG:3857.
+Supports v2 and v3 zarr stores via [zarrita](https://github.com/manzt/zarrita.js). Arbitrary CRS support via [proj4](https://github.com/proj4js/proj4js) reprojection for 'untiled' data, including EQUI7GRID continental zones. Tiled data need to be in EPSG:4326 or EPSG:3857.
 
 ### Multiscales
 
@@ -106,7 +106,7 @@ map.on('load', () => {
 | maxzoom | number | `Infinity` | Maximum zoom level for rendering |
 | fillValue | number | auto | No-data value (from metadata if not set) |
 | spatialDimensions | object | auto | Custom `{ lat, lon }` dim names |
-| crs | string | auto | CRS identifier for built-in projections (`EPSG:4326` or `EPSG:3857`). For other CRS, use `proj4`. |
+| crs | string | auto | CRS identifier for built-in projections (`EPSG:4326` or `EPSG:3857`) or EQUI7GRID continental zones (`EPSG:27701-27707`). For other CRS, use `proj4`. |
 | proj4 | string | - | Proj4 definition string for CRS reprojection (`bounds` recommended, else derived from coordinates) |
 | bounds | array | auto | `[xMin, yMin, xMax, yMax]` in source CRS units (degrees for EPSG:4326, meters for EPSG:3857). These are interpreted as edge bounds (not center-to-center) |
 | latIsAscending | boolean | auto | Latitude orientation |
@@ -228,6 +228,32 @@ new ZarrLayer({
 
 For datasets in non-standard projections (e.g., Lambert Conformal Conic, UTM), provide a `proj4` definition string. Specifying `bounds` in source CRS units is recommended for performance (otherwise derived from coordinate arrays). If you set `crs` to a non-`EPSG:4326`/`EPSG:3857` value without `proj4`, the renderer will warn and fall back to inferred CRS.
 
+### EQUI7GRID Support
+
+For datasets in EQUI7GRID projection, simply specify the continental zone EPSG code. The proj4 definition is automatically resolved:
+
+```ts
+new ZarrLayer({
+  // ...
+  crs: 'EPSG:27704', // Europe zone (automatically resolves to proj4 definition)
+  bounds: [5621452.01998, 2121415.69617, ...], // in source CRS units (meters)
+})
+```
+
+Supported EQUI7GRID zones:
+
+- **EPSG:27701** — Africa (AF)
+- **EPSG:27702** — Antarctica (AN)
+- **EPSG:27703** — Asia (AS)
+- **EPSG:27704** — Europe (EU)
+- **EPSG:27705** — North America (NA)
+- **EPSG:27706** — Oceania (OC)
+- **EPSG:27707** — South America (SA)
+
+### Custom proj4 Projections
+
+For other custom projections:
+
 ```ts
 new ZarrLayer({
   // ...
@@ -269,7 +295,7 @@ const result = await layer.queryData({
 // }
 ```
 
-Datasets using a custom projection (via the `proj4` option) return coordinates in the source coordinate system, with keys matching the store's axis names (e.g. `y`/`x`). All other datasets (EPSG:4326, EPSG:3857) return `lat`/`lon` keys with WGS84 degree values.
+Datasets using a custom projection (via the `proj4` option or EQUI7GRID EPSG codes) return coordinates in the source coordinate system, with keys matching the store's axis names (e.g. `y`/`x`). All other datasets (EPSG:4326, EPSG:3857) return `lat`/`lon` keys with WGS84 degree values.
 
 You can pass a third `options` argument to control query behavior:
 
