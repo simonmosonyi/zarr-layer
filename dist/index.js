@@ -6838,6 +6838,7 @@ var UntiledMode = class {
       const desc = this.zarrStore.describe();
       const currentLevel = this.levels[snapshot.index];
       const fillValue = currentLevel?.fillValue ?? desc.fill_value;
+      console.log('[zarr-layer debug] fillValue=', fillValue, 'level.fillValue=', currentLevel?.fillValue, 'desc.fill_value=', desc.fill_value, 'scaleFactor=', currentLevel?.scaleFactor ?? desc.scaleFactor);
       const { combinations: channelCombinations } = this.buildChannelCombinations(snapshot.baseMultiValueDims);
       const numChannels = channelCombinations.length || 1;
       const bandArrays = [];
@@ -6899,7 +6900,10 @@ var UntiledMode = class {
           const scaled = new Float32Array(bandData.length);
           for (let i = 0; i < bandData.length; i++) {
             const raw = bandData[i];
-            if (!Number.isFinite(raw)) {
+            if (fillValue !== null && raw === fillValue) {
+              if (i === 0) console.log('[zarr-layer debug] fill hit: raw=', raw, 'fillValue=', fillValue);
+              scaled[i] = NaN;
+            } else if (!Number.isFinite(raw)) {
               scaled[i] = raw;
             } else {
               scaled[i] = raw * scaleFactor + addOffset;
@@ -6907,7 +6911,7 @@ var UntiledMode = class {
           }
           bandData = scaled;
         }
-        const effectiveFillValue = fillValue !== null && (scaleFactor !== 1 || addOffset !== 0) ? fillValue * scaleFactor + addOffset : fillValue;
+        const effectiveFillValue = scaleFactor === 1 && addOffset === 0 ? fillValue : null;
         const { normalized: bandNormalized } = normalizeDataForTexture(
           bandData,
           effectiveFillValue,
@@ -8838,8 +8842,24 @@ function boundsToGeometry(bounds) {
   return {
     type: "MultiPolygon",
     coordinates: [
-      [[[west, south], [west, north], [180, north], [180, south], [west, south]]],
-      [[[-180, south], [-180, north], [east, north], [east, south], [-180, south]]]
+      [
+        [
+          [west, south],
+          [west, north],
+          [180, north],
+          [180, south],
+          [west, south]
+        ]
+      ],
+      [
+        [
+          [-180, south],
+          [-180, north],
+          [east, north],
+          [east, south],
+          [-180, south]
+        ]
+      ]
     ]
   };
 }

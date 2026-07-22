@@ -1618,6 +1618,12 @@ export class UntiledMode implements ZarrMode {
       // Use per-level metadata if available (for heterogeneous pyramids)
       const currentLevel = this.levels[snapshot.index]
       const fillValue = currentLevel?.fillValue ?? desc.fill_value
+      console.log(
+        '[zarr-layer] fillValue=',
+        fillValue,
+        'scaleFactor=',
+        currentLevel?.scaleFactor ?? desc.scaleFactor
+      )
 
       const { combinations: channelCombinations } =
         this.buildChannelCombinations(snapshot.baseMultiValueDims)
@@ -1717,14 +1723,24 @@ export class UntiledMode implements ZarrMode {
         const bandName = snapshot.bandNames[c] || `band_${c}`
         let bandData = bandArrays[c]
 
-        // Apply scale/offset if needed (converts raw to physical values)
+        // Apply scale/offset if needed (converts raw to physical values).
+        // Fill values are set to NaN here before scaling to avoid float32
+        // precision loss that would cause the equality check to fail later.
         if (scaleFactor !== 1 || addOffset !== 0) {
           const scaled = new Float32Array(bandData.length)
           for (let i = 0; i < bandData.length; i++) {
             const raw = bandData[i]
-            // Scale all values including fill - normalizeDataForTexture will filter by scaled fill
-            if (!Number.isFinite(raw)) {
-              scaled[i] = raw // Keep NaN/Inf as-is
+            if (fillValue !== null && raw === fillValue) {
+              if (i === 0)
+                console.log(
+                  '[zarr-layer] fill hit: raw=',
+                  raw,
+                  'fillValue=',
+                  fillValue
+                )
+              scaled[i] = NaN
+            } else if (!Number.isFinite(raw)) {
+              scaled[i] = raw
             } else {
               scaled[i] = raw * scaleFactor + addOffset
             }
@@ -1732,11 +1748,10 @@ export class UntiledMode implements ZarrMode {
           bandData = scaled
         }
 
-        // Compute the fill value in the same space as the data
+        // Fill values already NaN after the scaling loop; for unscaled data
+        // normalizeDataForTexture still needs the raw fill value to detect them.
         const effectiveFillValue =
-          fillValue !== null && (scaleFactor !== 1 || addOffset !== 0)
-            ? fillValue * scaleFactor + addOffset
-            : fillValue
+          scaleFactor === 1 && addOffset === 0 ? fillValue : null
 
         const { normalized: bandNormalized } = normalizeDataForTexture(
           bandData,
