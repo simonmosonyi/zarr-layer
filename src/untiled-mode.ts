@@ -220,7 +220,7 @@ export class UntiledMode implements ZarrMode {
 
   // Store and metadata
   private zarrStore: ZarrStore
-  private variable: string
+  private variables: string[] = []
   private selector: NormalizedSelector
   private bandNames: string[] = []
   private invalidate: () => void
@@ -299,15 +299,18 @@ export class UntiledMode implements ZarrMode {
 
   constructor(
     store: ZarrStore,
-    variable: string,
+    variable: string | string[],
     selector: NormalizedSelector,
     invalidate: () => void,
     fixedDataScale: number = 1
   ) {
     this.zarrStore = store
-    this.variable = variable
+    this.variables = Array.isArray(variable) ? variable : [variable]
     this.selector = selector
-    this.bandNames = getBands(variable, selector)
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      selector
+    )
     this.invalidate = invalidate
     this.fixedDataScale = fixedDataScale
   }
@@ -1618,12 +1621,6 @@ export class UntiledMode implements ZarrMode {
       // Use per-level metadata if available (for heterogeneous pyramids)
       const currentLevel = this.levels[snapshot.index]
       const fillValue = currentLevel?.fillValue ?? desc.fill_value
-      console.log(
-        '[zarr-layer] fillValue=',
-        fillValue,
-        'scaleFactor=',
-        currentLevel?.scaleFactor ?? desc.scaleFactor
-      )
 
       const { combinations: channelCombinations } =
         this.buildChannelCombinations(snapshot.baseMultiValueDims)
@@ -1637,7 +1634,25 @@ export class UntiledMode implements ZarrMode {
         this.isRemoved ||
         (this.activeLevel?.index ?? -1) !== snapshot.index
 
-      if (numChannels === 1) {
+      if (this.variables.length > 1) {
+        // RGB multi-variable path: one array per variable, same spatial slice
+        if (isStale()) return
+        const levelAsset = this.levels[snapshot.index].asset
+        const arrays = await this.zarrStore.getLevelArrays(
+          levelAsset,
+          this.variables
+        )
+        const results = await Promise.all(
+          arrays.map((arr) =>
+            zarr.get(arr, baseSliceArgs, { signal: controller.signal })
+          )
+        )
+        if (isStale()) return
+        for (const r of results)
+          bandArrays.push(
+            new Float32Array((r as { data: ArrayLike<number> }).data)
+          )
+      } else if (numChannels === 1) {
         // Single channel - simple fetch
         if (isStale()) return
 
@@ -2481,7 +2496,10 @@ export class UntiledMode implements ZarrMode {
 
   async setSelector(selector: NormalizedSelector): Promise<void> {
     this.selector = selector
-    this.bandNames = getBands(this.variable, selector)
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      selector
+    )
 
     if (!this.cachedGl) {
       // No gl context yet — selector is stored, update() will handle loading.
@@ -2707,7 +2725,7 @@ export class UntiledMode implements ZarrMode {
     options?: QueryOptions
   ): Promise<QueryResult> {
     const emptyResult = (): QueryResult => ({
-      [this.variable]: [],
+      [this.variables[0]]: [],
       dimensions: [],
       coordinates: { lat: [], lon: [] },
     })
@@ -2806,7 +2824,7 @@ export class UntiledMode implements ZarrMode {
       }
 
       return queryRegionUntiled(
-        this.variable,
+        this.variables[0],
         geom,
         normalizedSelector,
         fetched.data,
@@ -2928,7 +2946,13 @@ export class UntiledMode implements ZarrMode {
       false,
       desc.dimIndices
     )
-    return mergeQueryResults(westResult, eastResult, this.variable, yDim, xDim)
+    return mergeQueryResults(
+      westResult,
+      eastResult,
+      this.variables[0],
+      yDim,
+      xDim
+    )
   }
 
   async queryTimeSeries(
@@ -2948,7 +2972,7 @@ export class UntiledMode implements ZarrMode {
     const step = options?.step ?? 1
 
     const empty = (): TimeSeriesResult => ({
-      variable: options?.variable ?? this.variable,
+      variable: options?.variable ?? this.variables[0],
       values: [],
       timeIndices: [],
     })
@@ -3096,7 +3120,7 @@ export class UntiledMode implements ZarrMode {
       '[time-series] sliceArgs=%o shape=%o variable=%s',
       sliceArgs,
       level.zarrArray.shape,
-      options?.variable ?? this.variable
+      options?.variable ?? this.variables[0]
     )
 
     const getOpts = options?.signal ? { signal: options.signal } : undefined
@@ -3143,7 +3167,11 @@ export class UntiledMode implements ZarrMode {
       values.length
     )
 
-    return { variable: options?.variable ?? this.variable, values, timeIndices }
+    return {
+      variable: options?.variable ?? this.variables[0],
+      values,
+      timeIndices,
+    }
   }
 
   setTimeMeanData(result: TimeMeanResult | null): void {
@@ -3169,7 +3197,7 @@ export class UntiledMode implements ZarrMode {
     const step = options?.step ?? 1
 
     const empty = (): TimeMeanResult => ({
-      variable: this.variable,
+      variable: this.variables[0],
       data: new Float32Array(0),
       height: 0,
       width: 0,
@@ -3353,7 +3381,7 @@ export class UntiledMode implements ZarrMode {
     }
 
     return {
-      variable: this.variable,
+      variable: this.variables[0],
       data: meanData,
       height,
       width,

@@ -104,7 +104,7 @@ export class ZarrLayer {
 
   id: string
   private url: string
-  private variable: string
+  private variables: string[] = []
   private zarrVersion: 2 | 3 | null = null
   private spatialDimensions: SpatialDimensions
   private bounds: Bounds | undefined
@@ -329,7 +329,7 @@ export class ZarrLayer {
 
     this.id = id
     this.url = source ?? id // Use id as fallback identifier when using custom store
-    this.variable = variable
+    this.variables = Array.isArray(variable) ? variable : [variable]
     this.zarrVersion = zarrVersion ?? null
     this.spatialDimensions = spatialDimensions
     this.bounds = bounds
@@ -350,7 +350,10 @@ export class ZarrLayer {
     this.customFrag = customFrag
     this.customUniforms = uniforms || {}
 
-    this.bandNames = getBands(variable, this.normalizedSelector)
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      this.normalizedSelector
+    )
     if (this.bandNames.length > 1 || customFrag) {
       this.customShaderConfig = {
         bands: this.bandNames,
@@ -420,15 +423,16 @@ export class ZarrLayer {
     this.invalidate()
   }
 
-  async setVariable(variable: string) {
-    if (variable === this.variable) return
+  async setVariable(variable: string | string[]) {
+    const normalized = Array.isArray(variable) ? variable : [variable]
+    if (JSON.stringify(normalized) === JSON.stringify(this.variables)) return
 
     this.metadataLoading = true
     this.emitLoadingState()
 
     try {
       this.initError = null
-      this.variable = variable
+      this.variables = normalized
       if (this.zarrStore) {
         this.zarrStore.cleanup()
         this.zarrStore = null
@@ -472,7 +476,10 @@ export class ZarrLayer {
     this.selector = selector
     this.normalizedSelector = normalized
 
-    this.bandNames = getBands(this.variable, this.normalizedSelector)
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      this.normalizedSelector
+    )
     if (this.bandNames.length > 1 || this.customFrag) {
       this.customShaderConfig = {
         bands: this.bandNames,
@@ -575,7 +582,7 @@ export class ZarrLayer {
     if (desc.multiscaleType === 'tiled') {
       this.mode = new TiledMode(
         this.zarrStore,
-        this.variable,
+        this.variables[0],
         this.normalizedSelector,
         this.invalidate,
         this.fixedDataScale
@@ -584,7 +591,7 @@ export class ZarrLayer {
       // Use UntiledMode for untiled multiscales and single-level datasets
       this.mode = new UntiledMode(
         this.zarrStore,
-        this.variable,
+        this.variables,
         this.normalizedSelector,
         this.invalidate,
         this.fixedDataScale
@@ -607,7 +614,7 @@ export class ZarrLayer {
       this.zarrStore = new ZarrStore({
         source: this.url,
         version: this.zarrVersion,
-        variable: this.variable,
+        variable: this.variables[0],
         spatialDimensions: this.spatialDimensions,
         bounds: this.bounds,
         crs: this.crs,
@@ -638,7 +645,10 @@ export class ZarrLayer {
       this.normalizedSelector = normalizeSelector(this.selector)
       await this.loadInitialDimensionValues()
 
-      this.bandNames = getBands(this.variable, this.normalizedSelector)
+      this.bandNames = getBands(
+        this.variables.length > 1 ? this.variables : this.variables[0],
+        this.normalizedSelector
+      )
       if (this.bandNames.length > 1 || this.customFrag) {
         this.customShaderConfig = {
           bands: this.bandNames,
@@ -914,7 +924,7 @@ export class ZarrLayer {
   ): Promise<QueryResult> {
     if (!this.mode?.queryData) {
       return {
-        [this.variable]: [],
+        [this.variables[0]]: [],
         dimensions: [],
         coordinates: {},
       }
@@ -935,7 +945,7 @@ export class ZarrLayer {
     }
   ): Promise<TimeSeriesResult> {
     if (!this.mode?.queryTimeSeries) {
-      return { variable: this.variable, values: [], timeIndices: [] }
+      return { variable: this.variables[0], values: [], timeIndices: [] }
     }
     return this.mode.queryTimeSeries(geometry, options)
   }
@@ -955,7 +965,7 @@ export class ZarrLayer {
   }): Promise<TimeMeanResult> {
     if (!this.mode?.computeTimeMean) {
       return {
-        variable: this.variable,
+        variable: this.variables[0],
         data: new Float32Array(0),
         height: 0,
         width: 0,

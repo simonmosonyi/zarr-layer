@@ -123,6 +123,9 @@ function getBandInformation(selector) {
   return result;
 }
 function getBands(variable, selector) {
+  if (Array.isArray(variable)) {
+    return variable.map(sanitizeGlslName);
+  }
   const bandInfo = getBandInformation(selector);
   const bandNames = Object.keys(bandInfo);
   if (bandNames.length === 0) {
@@ -640,6 +643,9 @@ var ZarrStore = class {
   async getLevelArray(level) {
     const key = `${level}/${this.variable}`;
     return this._getArray(key);
+  }
+  async getLevelArrays(level, variables) {
+    return Promise.all(variables.map((v) => this._getArray(`${level}/${v}`)));
   }
   async getArray() {
     return this._getArray(this.variable);
@@ -5852,6 +5858,7 @@ var UntiledMode = class {
     this.loadingLevelIndex = null;
     // Bounds
     this.mercatorBounds = null;
+    this.variables = [];
     this.bandNames = [];
     this.dimIndices = {};
     this.xyLimits = null;
@@ -5915,9 +5922,9 @@ var UntiledMode = class {
     this.pendingMeanUpdate = false;
     this.pendingMeanData = null;
     this.zarrStore = store;
-    this.variable = variable;
+    this.variables = Array.isArray(variable) ? variable : [variable];
     this.selector = selector;
-    this.bandNames = getBands(variable, selector);
+    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], selector);
     this.invalidate = invalidate;
     this.fixedDataScale = fixedDataScale;
   }
@@ -6838,12 +6845,21 @@ var UntiledMode = class {
       const desc = this.zarrStore.describe();
       const currentLevel = this.levels[snapshot.index];
       const fillValue = currentLevel?.fillValue ?? desc.fill_value;
-      console.log('[zarr-layer debug] fillValue=', fillValue, 'level.fillValue=', currentLevel?.fillValue, 'desc.fill_value=', desc.fill_value, 'scaleFactor=', currentLevel?.scaleFactor ?? desc.scaleFactor);
       const { combinations: channelCombinations } = this.buildChannelCombinations(snapshot.baseMultiValueDims);
       const numChannels = channelCombinations.length || 1;
       const bandArrays = [];
       const isStale = () => controller.signal.aborted || this.isRemoved || (this.activeLevel?.index ?? -1) !== snapshot.index;
-      if (numChannels === 1) {
+      if (this.variables.length > 1) {
+        if (isStale()) return;
+        const levelAsset = this.levels[snapshot.index].asset;
+        const arrays = await this.zarrStore.getLevelArrays(levelAsset, this.variables);
+        const results = await Promise.all(
+          arrays.map((arr) => zarr4.get(arr, baseSliceArgs, { signal: controller.signal }))
+        );
+        if (isStale()) return;
+        for (const r of results)
+          bandArrays.push(new Float32Array(r.data));
+      } else if (numChannels === 1) {
         if (isStale()) return;
         const result2 = await zarr4.get(snapshot.zarrArray, baseSliceArgs, {
           signal: controller.signal
@@ -6901,7 +6917,13 @@ var UntiledMode = class {
           for (let i = 0; i < bandData.length; i++) {
             const raw = bandData[i];
             if (fillValue !== null && raw === fillValue) {
-              if (i === 0) console.log('[zarr-layer debug] fill hit: raw=', raw, 'fillValue=', fillValue);
+              if (i === 0)
+                console.log(
+                  "[zarr-layer] fill hit: raw=",
+                  raw,
+                  "fillValue=",
+                  fillValue
+                );
               scaled[i] = NaN;
             } else if (!Number.isFinite(raw)) {
               scaled[i] = raw;
@@ -7424,7 +7446,7 @@ var UntiledMode = class {
   }
   async setSelector(selector) {
     this.selector = selector;
-    this.bandNames = getBands(this.variable, selector);
+    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], selector);
     if (!this.cachedGl) {
       this.invalidate();
       return;
@@ -7572,7 +7594,7 @@ var UntiledMode = class {
    */
   async queryData(geometry, selector, options) {
     const emptyResult = () => ({
-      [this.variable]: [],
+      [this.variables[0]]: [],
       dimensions: [],
       coordinates: { lat: [], lon: [] }
     });
@@ -7652,7 +7674,7 @@ var UntiledMode = class {
         console.log("[query-debug] subsetSourceBounds=%o", subsetSourceBounds);
       }
       return queryRegionUntiled(
-        this.variable,
+        this.variables[0],
         geom,
         normalizedSelector,
         fetched.data,
@@ -7748,14 +7770,14 @@ var UntiledMode = class {
       false,
       desc.dimIndices
     );
-    return mergeQueryResults(westResult, eastResult, this.variable, yDim, xDim);
+    return mergeQueryResults(westResult, eastResult, this.variables[0], yDim, xDim);
   }
   async queryTimeSeries(geometry, options) {
     const timeDim = options?.timeDimension ?? "time";
     const start = options?.start ?? 0;
     const step = options?.step ?? 1;
     const empty = () => ({
-      variable: options?.variable ?? this.variable,
+      variable: options?.variable ?? this.variables[0],
       values: [],
       timeIndices: []
     });
@@ -7864,7 +7886,7 @@ var UntiledMode = class {
       "[time-series] sliceArgs=%o shape=%o variable=%s",
       sliceArgs,
       level.zarrArray.shape,
-      options?.variable ?? this.variable
+      options?.variable ?? this.variables[0]
     );
     const getOpts = options?.signal ? { signal: options.signal } : void 0;
     const result = await zarr4.get(queryArray, sliceArgs, getOpts);
@@ -7903,7 +7925,7 @@ var UntiledMode = class {
       values[0],
       values.length
     );
-    return { variable: options?.variable ?? this.variable, values, timeIndices };
+    return { variable: options?.variable ?? this.variables[0], values, timeIndices };
   }
   setTimeMeanData(result) {
     this.pendingMeanData = result;
@@ -7916,7 +7938,7 @@ var UntiledMode = class {
     const start = rawStart != null && Number.isFinite(rawStart) ? Math.max(0, Math.floor(rawStart)) : 0;
     const step = options?.step ?? 1;
     const empty = () => ({
-      variable: this.variable,
+      variable: this.variables[0],
       data: new Float32Array(0),
       height: 0,
       width: 0,
@@ -8041,7 +8063,7 @@ var UntiledMode = class {
       meanData[i] = countArr[i] > 0 ? sumArr[i] / countArr[i] : NaN;
     }
     return {
-      variable: this.variable,
+      variable: this.variables[0],
       data: meanData,
       height,
       width,
@@ -8149,6 +8171,7 @@ var ZarrLayer = class {
     renderPoles = false
   }) {
     this.type = "custom";
+    this.variables = [];
     this.zarrVersion = null;
     this.latIsAscending = null;
     this.selectorHash = "";
@@ -8208,7 +8231,7 @@ var ZarrLayer = class {
     }
     this.id = id;
     this.url = source ?? id;
-    this.variable = variable;
+    this.variables = Array.isArray(variable) ? variable : [variable];
     this.zarrVersion = zarrVersion ?? null;
     this.spatialDimensions = spatialDimensions;
     this.bounds = bounds;
@@ -8228,7 +8251,7 @@ var ZarrLayer = class {
     this.maxZoom = maxzoom;
     this.customFrag = customFrag;
     this.customUniforms = uniforms || {};
-    this.bandNames = getBands(variable, this.normalizedSelector);
+    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], this.normalizedSelector);
     if (this.bandNames.length > 1 || customFrag) {
       this.customShaderConfig = {
         bands: this.bandNames,
@@ -8354,12 +8377,13 @@ var ZarrLayer = class {
     this.invalidate();
   }
   async setVariable(variable) {
-    if (variable === this.variable) return;
+    const normalized = Array.isArray(variable) ? variable : [variable];
+    if (JSON.stringify(normalized) === JSON.stringify(this.variables)) return;
     this.metadataLoading = true;
     this.emitLoadingState();
     try {
       this.initError = null;
-      this.variable = variable;
+      this.variables = normalized;
       if (this.zarrStore) {
         this.zarrStore.cleanup();
         this.zarrStore = null;
@@ -8400,7 +8424,7 @@ var ZarrLayer = class {
     this.selectorHash = nextHash;
     this.selector = selector;
     this.normalizedSelector = normalized;
-    this.bandNames = getBands(this.variable, this.normalizedSelector);
+    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], this.normalizedSelector);
     if (this.bandNames.length > 1 || this.customFrag) {
       this.customShaderConfig = {
         bands: this.bandNames,
@@ -8478,7 +8502,7 @@ var ZarrLayer = class {
     if (desc.multiscaleType === "tiled") {
       this.mode = new TiledMode(
         this.zarrStore,
-        this.variable,
+        this.variables[0],
         this.normalizedSelector,
         this.invalidate,
         this.fixedDataScale
@@ -8486,7 +8510,7 @@ var ZarrLayer = class {
     } else {
       this.mode = new UntiledMode(
         this.zarrStore,
-        this.variable,
+        this.variables,
         this.normalizedSelector,
         this.invalidate,
         this.fixedDataScale
@@ -8504,7 +8528,7 @@ var ZarrLayer = class {
       this.zarrStore = new ZarrStore({
         source: this.url,
         version: this.zarrVersion,
-        variable: this.variable,
+        variable: this.variables[0],
         spatialDimensions: this.spatialDimensions,
         bounds: this.bounds,
         crs: this.crs,
@@ -8525,7 +8549,7 @@ var ZarrLayer = class {
       }
       this.normalizedSelector = normalizeSelector(this.selector);
       await this.loadInitialDimensionValues();
-      this.bandNames = getBands(this.variable, this.normalizedSelector);
+      this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], this.normalizedSelector);
       if (this.bandNames.length > 1 || this.customFrag) {
         this.customShaderConfig = {
           bands: this.bandNames,
@@ -8710,7 +8734,7 @@ var ZarrLayer = class {
   async queryData(geometry, selector, options) {
     if (!this.mode?.queryData) {
       return {
-        [this.variable]: [],
+        [this.variables[0]]: [],
         dimensions: [],
         coordinates: {}
       };
@@ -8719,7 +8743,7 @@ var ZarrLayer = class {
   }
   async queryTimeSeries(geometry, options) {
     if (!this.mode?.queryTimeSeries) {
-      return { variable: this.variable, values: [], timeIndices: [] };
+      return { variable: this.variables[0], values: [], timeIndices: [] };
     }
     return this.mode.queryTimeSeries(geometry, options);
   }
@@ -8730,7 +8754,7 @@ var ZarrLayer = class {
   async computeTimeMean(options) {
     if (!this.mode?.computeTimeMean) {
       return {
-        variable: this.variable,
+        variable: this.variables[0],
         data: new Float32Array(0),
         height: 0,
         width: 0,

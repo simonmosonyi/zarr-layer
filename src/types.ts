@@ -69,7 +69,7 @@ export interface ZarrLayerOptions {
    * URL to the Zarr store. Required unless `store` is provided.
    */
   source?: string
-  variable: string
+  variable: string | string[]
   /**
    * Custom zarrita-compatible store to use instead of creating a FetchStore from source.
    * Useful for IcechunkStore or other custom storage backends.

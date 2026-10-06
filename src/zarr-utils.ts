@@ -190,9 +190,12 @@ function getBandInformation(
 }
 
 export function getBands(
-  variable: string,
+  variable: string | string[],
   selector: NormalizedSelector
 ): string[] {
+  if (Array.isArray(variable)) {
+    return variable.map(sanitizeGlslName)
+  }
   const bandInfo = getBandInformation(selector)
   const bandNames = Object.keys(bandInfo)
 

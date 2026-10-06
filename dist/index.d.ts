@@ -46,7 +46,7 @@ interface ZarrLayerOptions {
      * URL to the Zarr store. Required unless `store` is provided.
      */
     source?: string;
-    variable: string;
+    variable: string | string[];
     /**
      * Custom zarrita-compatible store to use instead of creating a FetchStore from source.
      * Useful for IcechunkStore or other custom storage backends.
@@ -259,7 +259,7 @@ declare class ZarrLayer {
     readonly renderingMode: '2d' | '3d';
     id: string;
     private url;
-    private variable;
+    private variables;
     private zarrVersion;
     private spatialDimensions;
     private bounds;
@@ -320,7 +320,7 @@ declare class ZarrLayer {
     setClim(clim: [number, number]): void;
     setColormap(colormap: ColormapArray): void;
     setUniforms(uniforms: Record<string, number>): void;
-    setVariable(variable: string): Promise<void>;
+    setVariable(variable: string | string[]): Promise<void>;
     setSelector(selector: Selector): Promise<void>;
     onAdd(map: MapLike, gl: WebGL2RenderingContext | WebGLRenderingContext): void;
     private _onAddAsync;

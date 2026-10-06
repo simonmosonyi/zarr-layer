@@ -382,6 +382,13 @@ export class ZarrStore {
     return this._getArray(key)
   }
 
+  async getLevelArrays(
+    level: string,
+    variables: string[]
+  ): Promise<zarr.Array<zarr.DataType, Readable>[]> {
+    return Promise.all(variables.map((v) => this._getArray(`${level}/${v}`)))
+  }
+
   async getArray(): Promise<zarr.Array<zarr.DataType, Readable>> {
     return this._getArray(this.variable)
   }
