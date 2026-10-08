@@ -3115,12 +3115,14 @@ export class UntiledMode implements ZarrMode {
       queryArray = await this.zarrStore.openArray(key)
       const attrs = queryArray.attrs as Record<string, unknown>
       const rawFill = queryArray.fillValue
+      // PATCH[fill-override]: configFillValue (if set) wins over metadata.
       fillValue =
-        typeof rawFill === 'number'
+        this.configFillValue ??
+        (typeof rawFill === 'number'
           ? rawFill
           : typeof rawFill === 'string'
           ? Number(rawFill)
-          : null
+          : null)
       scaleFactor = (attrs?.scale_factor as number | undefined) ?? 1
       addOffset = (attrs?.add_offset as number | undefined) ?? 0
     } else {

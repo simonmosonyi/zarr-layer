@@ -7902,7 +7902,7 @@ var UntiledMode = class {
       queryArray = await this.zarrStore.openArray(key);
       const attrs = queryArray.attrs;
       const rawFill = queryArray.fillValue;
-      fillValue = typeof rawFill === "number" ? rawFill : typeof rawFill === "string" ? Number(rawFill) : null;
+      fillValue = this.configFillValue ?? (typeof rawFill === "number" ? rawFill : typeof rawFill === "string" ? Number(rawFill) : null);
       scaleFactor = attrs?.scale_factor ?? 1;
       addOffset = attrs?.add_offset ?? 0;
     } else {
