@@ -383,14 +383,30 @@ function createWGS84ToSourceTransformer(proj4def) {
   const isAeqd = proj4def.includes("+proj=aeqd");
   const x0 = isAeqd ? parseFloat(proj4def.match(/\+x_0=(-?[\d.]+)/)?.[1] ?? "0") || 0 : 0;
   const y0 = isAeqd ? parseFloat(proj4def.match(/\+y_0=(-?[\d.]+)/)?.[1] ?? "0") || 0 : 0;
+  let effX0 = x0;
+  let effY0 = y0;
+  if (isAeqd && (x0 !== 0 || y0 !== 0)) {
+    try {
+      const lon0 = parseFloat(proj4def.match(/\+lon_0=(-?[\d.]+)/)?.[1] ?? "0") || 0;
+      const lat0 = parseFloat(proj4def.match(/\+lat_0=(-?[\d.]+)/)?.[1] ?? "0") || 0;
+      const probeMerc = wgsToMerc.forward([lon0, lat0]);
+      const [probeX, probeY] = srcToMerc.inverse(probeMerc);
+      const applied = Math.abs(probeX - x0) < Math.abs(x0) / 2 && Math.abs(probeY - y0) < Math.abs(y0) / 2;
+      if (applied) {
+        effX0 = 0;
+        effY0 = 0;
+      }
+    } catch {
+    }
+  }
   return {
-    // WGS84 → Mercator → source CRS (AEQD: manually add false easting that proj4js omits)
+    // WGS84 → Mercator → source CRS (AEQD: manually add false easting iff proj4js doesn't)
     forward: (lon, lat) => {
       const merc = wgsToMerc.forward([lon, lat]);
       if (!isFinite(merc[0]) || !isFinite(merc[1])) return [NaN, NaN];
       try {
         const [nx, ny] = srcToMerc.inverse(merc);
-        return [nx + x0, ny + y0];
+        return [nx + effX0, ny + effY0];
       } catch {
         return [NaN, NaN];
       }

@@ -33,3 +33,29 @@ and restore the four `currentLevel?.fillValue ?? desc.fill_value`
 expressions. Also delete the `_fillValueFromConfig` field and the
 `setConfigFillValue` call site after mode creation. Rebuild with
 `nvm use 20 && npm run build`.
+
+---
+
+## PATCH[aeqd-false-easting] — detect proj4js AEQD false-easting behavior at runtime
+
+**When:** 2026-10-08 (follow-up to PATCH[fill-override])
+**Why:** Older proj4js returned AEQD inverse coords WITHOUT the `+x_0`/`+y_0`
+false easting/northing, so `createWGS84ToSourceTransformer` parsed those out of
+the proj4 string and added them manually. Newer proj4js already includes them,
+so blind addition doubles the offset. Symptom (seen in EODC prod): S5P
+(the only AEQD dataset) projected Austria clicks to `srcX ≈ 11M` instead of
+`~5M`; `sourceCRSToPixel` clamped to `width-1 = 120` for every click.
+
+**Change sites (grep `PATCH[aeqd-false-easting]`):**
+- `src/projection-utils.ts` — at `createWGS84ToSourceTransformer` init,
+  project `(lon_0, lat_0)` → EPSG:3857 → inverse, check whether the result
+  already includes `x_0`/`y_0`. If yes, set `effX0 = effY0 = 0`. Otherwise
+  keep the manual add. Guarded by try/catch — falls back to the original
+  manual-add behavior if the probe throws.
+
+**Behavior:** Correct for both proj4js versions. Transparent to callers.
+Pure runtime probe (one forward+inverse at transformer construction, cached
+in the closure).
+
+**To revert:** `git grep "PATCH\[aeqd-false-easting\]"`, delete the probe
+block, and restore `return [nx + x0, ny + y0]` in `forward`. Rebuild.

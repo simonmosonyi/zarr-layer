@@ -218,9 +218,11 @@ export function createWGS84ToSourceTransformer(proj4def: string): {
     throw new Error(formatProj4Error(proj4def, err))
   }
 
-  // proj4js AEQD inverse does not add +x_0/+y_0 false easting/northing; apply manually.
-  // Other projections (LCC, UTM, etc.) are unaffected — their inverse already returns
-  // coordinates in the source CRS with false easting included.
+  // proj4js AEQD inverse historically did not add +x_0/+y_0 false easting/northing;
+  // zarr-layer added them manually. Newer proj4js versions apply them automatically,
+  // so blindly adding doubles the offset. PATCH[aeqd-false-easting]: probe once at
+  // init to detect which proj4js behavior is active and only add manually if needed.
+  // Other projections (LCC, UTM, etc.) are unaffected.
   const isAeqd = proj4def.includes('+proj=aeqd')
   const x0 = isAeqd
     ? parseFloat(proj4def.match(/\+x_0=(-?[\d.]+)/)?.[1] ?? '0') || 0
@@ -229,14 +231,40 @@ export function createWGS84ToSourceTransformer(proj4def: string): {
     ? parseFloat(proj4def.match(/\+y_0=(-?[\d.]+)/)?.[1] ?? '0') || 0
     : 0
 
+  // PATCH[aeqd-false-easting]: probe for current proj4js AEQD behavior.
+  // Project the AEQD origin (lon_0, lat_0) → EPSG:3857, invert back, and
+  // check whether the result already includes false easting (≈x_0) or not (≈0).
+  let effX0 = x0
+  let effY0 = y0
+  if (isAeqd && (x0 !== 0 || y0 !== 0)) {
+    try {
+      const lon0 =
+        parseFloat(proj4def.match(/\+lon_0=(-?[\d.]+)/)?.[1] ?? '0') || 0
+      const lat0 =
+        parseFloat(proj4def.match(/\+lat_0=(-?[\d.]+)/)?.[1] ?? '0') || 0
+      const probeMerc = wgsToMerc.forward([lon0, lat0]) as [number, number]
+      const [probeX, probeY] = srcToMerc.inverse(probeMerc) as [number, number]
+      // If proj4 already applies x_0, probeX ≈ x_0; otherwise probeX ≈ 0.
+      const applied =
+        Math.abs(probeX - x0) < Math.abs(x0) / 2 &&
+        Math.abs(probeY - y0) < Math.abs(y0) / 2
+      if (applied) {
+        effX0 = 0
+        effY0 = 0
+      }
+    } catch {
+      // Probe failed — keep the manual-add behavior.
+    }
+  }
+
   return {
-    // WGS84 → Mercator → source CRS (AEQD: manually add false easting that proj4js omits)
+    // WGS84 → Mercator → source CRS (AEQD: manually add false easting iff proj4js doesn't)
     forward: (lon: number, lat: number): [number, number] => {
       const merc = wgsToMerc.forward([lon, lat]) as [number, number]
       if (!isFinite(merc[0]) || !isFinite(merc[1])) return [NaN, NaN]
       try {
         const [nx, ny] = srcToMerc.inverse(merc) as [number, number]
-        return [nx + x0, ny + y0]
+        return [nx + effX0, ny + effY0]
       } catch {
         return [NaN, NaN]
       }
