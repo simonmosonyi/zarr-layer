@@ -5841,6 +5841,10 @@ var UntiledMode = class {
   constructor(store, variable, selector, invalidate, fixedDataScale = 1) {
     this.isMultiscale = false;
     this.channels = 1;
+    // PATCH[fill-override]: when set from the owning ZarrLayer's config, this
+    // takes precedence over currentLevel?.fillValue ?? desc.fill_value in every
+    // fallback expression below. See PATCH-NOTES.md for context.
+    this.configFillValue = null;
     // The single committed snapshot. All per-level state (array, dims, slice
     // args) is swapped atomically through `loadLevel()`; nothing else mutates
     // these fields.
@@ -5924,7 +5928,10 @@ var UntiledMode = class {
     this.zarrStore = store;
     this.variables = Array.isArray(variable) ? variable : [variable];
     this.selector = selector;
-    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], selector);
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      selector
+    );
     this.invalidate = invalidate;
     this.fixedDataScale = fixedDataScale;
   }
@@ -6844,7 +6851,7 @@ var UntiledMode = class {
       baseSliceArgs[lonIdx] = zarr4.slice(xStart, xEnd);
       const desc = this.zarrStore.describe();
       const currentLevel = this.levels[snapshot.index];
-      const fillValue = currentLevel?.fillValue ?? desc.fill_value;
+      const fillValue = this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value;
       const { combinations: channelCombinations } = this.buildChannelCombinations(snapshot.baseMultiValueDims);
       const numChannels = channelCombinations.length || 1;
       const bandArrays = [];
@@ -6852,13 +6859,20 @@ var UntiledMode = class {
       if (this.variables.length > 1) {
         if (isStale()) return;
         const levelAsset = this.levels[snapshot.index].asset;
-        const arrays = await this.zarrStore.getLevelArrays(levelAsset, this.variables);
+        const arrays = await this.zarrStore.getLevelArrays(
+          levelAsset,
+          this.variables
+        );
         const results = await Promise.all(
-          arrays.map((arr) => zarr4.get(arr, baseSliceArgs, { signal: controller.signal }))
+          arrays.map(
+            (arr) => zarr4.get(arr, baseSliceArgs, { signal: controller.signal })
+          )
         );
         if (isStale()) return;
         for (const r of results)
-          bandArrays.push(new Float32Array(r.data));
+          bandArrays.push(
+            new Float32Array(r.data)
+          );
       } else if (numChannels === 1) {
         if (isStale()) return;
         const result2 = await zarr4.get(snapshot.zarrArray, baseSliceArgs, {
@@ -7394,6 +7408,11 @@ var UntiledMode = class {
   setLoadingCallback(callback) {
     setLoadingCallback(this.loadingManager, callback);
   }
+  // PATCH[fill-override]: see PATCH-NOTES.md. Lets ZarrLayer forward the
+  // explicit fillValue option so it beats metadata declarations.
+  setConfigFillValue(v) {
+    this.configFillValue = v;
+  }
   getCRS() {
     return this.crs;
   }
@@ -7446,7 +7465,10 @@ var UntiledMode = class {
   }
   async setSelector(selector) {
     this.selector = selector;
-    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], selector);
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      selector
+    );
     if (!this.cachedGl) {
       this.invalidate();
       return;
@@ -7612,7 +7634,8 @@ var UntiledMode = class {
     const transforms = {
       scaleFactor: currentLevel?.scaleFactor ?? desc.scaleFactor,
       addOffset: currentLevel?.addOffset ?? desc.addOffset,
-      fillValue: currentLevel?.fillValue ?? desc.fill_value
+      // PATCH[fill-override]: configFillValue (if set) wins over metadata.
+      fillValue: this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value
     };
     const sourceBounds = this.xyLimits ? [
       this.xyLimits.xMin,
@@ -7770,7 +7793,13 @@ var UntiledMode = class {
       false,
       desc.dimIndices
     );
-    return mergeQueryResults(westResult, eastResult, this.variables[0], yDim, xDim);
+    return mergeQueryResults(
+      westResult,
+      eastResult,
+      this.variables[0],
+      yDim,
+      xDim
+    );
   }
   async queryTimeSeries(geometry, options) {
     const timeDim = options?.timeDimension ?? "time";
@@ -7880,7 +7909,7 @@ var UntiledMode = class {
       const currentLevel = this.levels[level.index];
       scaleFactor = currentLevel?.scaleFactor ?? desc.scaleFactor;
       addOffset = currentLevel?.addOffset ?? desc.addOffset;
-      fillValue = currentLevel?.fillValue ?? desc.fill_value;
+      fillValue = this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value;
     }
     console.log(
       "[time-series] sliceArgs=%o shape=%o variable=%s",
@@ -7925,7 +7954,11 @@ var UntiledMode = class {
       values[0],
       values.length
     );
-    return { variable: options?.variable ?? this.variables[0], values, timeIndices };
+    return {
+      variable: options?.variable ?? this.variables[0],
+      values,
+      timeIndices
+    };
   }
   setTimeMeanData(result) {
     this.pendingMeanData = result;
@@ -8033,7 +8066,7 @@ var UntiledMode = class {
     const currentLevel = this.levels[level.index];
     const scaleFactor = currentLevel?.scaleFactor ?? desc.scaleFactor;
     const addOffset = currentLevel?.addOffset ?? desc.addOffset;
-    const fillValue = currentLevel?.fillValue ?? desc.fill_value;
+    const fillValue = this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value;
     const strideT = strides[timeOutAxis];
     const strideY = strides[latOutAxis];
     const strideX = strides[lonOutAxis];
@@ -8176,6 +8209,9 @@ var ZarrLayer = class {
     this.latIsAscending = null;
     this.selectorHash = "";
     this._fillValue = null;
+    // PATCH[fill-override]: separate from _fillValue so we only override the
+    // mode's metadata-derived fill when the user explicitly declared one.
+    this._fillValueFromConfig = null;
     this.scaleFactor = 1;
     this.offset = 0;
     // Once true, fixedDataScale is locked (mode has captured it)
@@ -8251,7 +8287,10 @@ var ZarrLayer = class {
     this.maxZoom = maxzoom;
     this.customFrag = customFrag;
     this.customUniforms = uniforms || {};
-    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], this.normalizedSelector);
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      this.normalizedSelector
+    );
     if (this.bandNames.length > 1 || customFrag) {
       this.customShaderConfig = {
         bands: this.bandNames,
@@ -8259,7 +8298,10 @@ var ZarrLayer = class {
         customUniforms: this.customUniforms
       };
     }
-    if (fillValue !== void 0) this._fillValue = fillValue;
+    if (fillValue !== void 0) {
+      this._fillValue = fillValue;
+      this._fillValueFromConfig = fillValue;
+    }
     this.onLoadingStateChange = onLoadingStateChange;
     this.proj4 = proj42;
     this.transformRequest = transformRequest;
@@ -8424,7 +8466,10 @@ var ZarrLayer = class {
     this.selectorHash = nextHash;
     this.selector = selector;
     this.normalizedSelector = normalized;
-    this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], this.normalizedSelector);
+    this.bandNames = getBands(
+      this.variables.length > 1 ? this.variables : this.variables[0],
+      this.normalizedSelector
+    );
     if (this.bandNames.length > 1 || this.customFrag) {
       this.customShaderConfig = {
         bands: this.bandNames,
@@ -8515,6 +8560,7 @@ var ZarrLayer = class {
         this.invalidate,
         this.fixedDataScale
       );
+      this.mode.setConfigFillValue(this._fillValueFromConfig);
     }
     this.dataScaleLocked = true;
     this.mode.setLoadingCallback(this.handleChunkLoadingChange);
@@ -8549,7 +8595,10 @@ var ZarrLayer = class {
       }
       this.normalizedSelector = normalizeSelector(this.selector);
       await this.loadInitialDimensionValues();
-      this.bandNames = getBands(this.variables.length > 1 ? this.variables : this.variables[0], this.normalizedSelector);
+      this.bandNames = getBands(
+        this.variables.length > 1 ? this.variables : this.variables[0],
+        this.normalizedSelector
+      );
       if (this.bandNames.length > 1 || this.customFrag) {
         this.customShaderConfig = {
           bands: this.bandNames,

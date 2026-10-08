@@ -274,6 +274,7 @@ declare class ZarrLayer {
     private maxZoom;
     private selectorHash;
     private _fillValue;
+    private _fillValueFromConfig;
     private scaleFactor;
     private offset;
     private fixedDataScale;

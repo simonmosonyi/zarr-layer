@@ -121,6 +121,9 @@ export class ZarrLayer {
   private selectorHash: string = ''
 
   private _fillValue: number | null = null
+  // PATCH[fill-override]: separate from _fillValue so we only override the
+  // mode's metadata-derived fill when the user explicitly declared one.
+  private _fillValueFromConfig: number | null = null
   private scaleFactor: number = 1
   private offset: number = 0
   private fixedDataScale: number
@@ -362,7 +365,12 @@ export class ZarrLayer {
       }
     }
 
-    if (fillValue !== undefined) this._fillValue = fillValue
+    if (fillValue !== undefined) {
+      this._fillValue = fillValue
+      // PATCH[fill-override]: remember that config supplied the fill, so the
+      // mode can prefer it over any (possibly incorrect) metadata value.
+      this._fillValueFromConfig = fillValue
+    }
     this.onLoadingStateChange = onLoadingStateChange
     this.proj4 = proj4
     this.transformRequest = transformRequest
@@ -596,6 +604,9 @@ export class ZarrLayer {
         this.invalidate,
         this.fixedDataScale
       )
+      // PATCH[fill-override]: push the explicit config fill into the mode so
+      // its upload/query paths prefer it over metadata.
+      ;(this.mode as UntiledMode).setConfigFillValue(this._fillValueFromConfig)
     }
 
     // Lock immediately after mode captures the value, before async initialize()

@@ -198,6 +198,10 @@ export class UntiledMode implements ZarrMode {
   isMultiscale: boolean = false
 
   private channels: number = 1
+  // PATCH[fill-override]: when set from the owning ZarrLayer's config, this
+  // takes precedence over currentLevel?.fillValue ?? desc.fill_value in every
+  // fallback expression below. See PATCH-NOTES.md for context.
+  private configFillValue: number | null = null
 
   // The single committed snapshot. All per-level state (array, dims, slice
   // args) is swapped atomically through `loadLevel()`; nothing else mutates
@@ -1620,7 +1624,9 @@ export class UntiledMode implements ZarrMode {
       const desc = this.zarrStore.describe()
       // Use per-level metadata if available (for heterogeneous pyramids)
       const currentLevel = this.levels[snapshot.index]
-      const fillValue = currentLevel?.fillValue ?? desc.fill_value
+      // PATCH[fill-override]: configFillValue (if set) wins over metadata.
+      const fillValue =
+        this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value
 
       const { combinations: channelCombinations } =
         this.buildChannelCombinations(snapshot.baseMultiValueDims)
@@ -2433,6 +2439,12 @@ export class UntiledMode implements ZarrMode {
     setLoadingCallbackUtil(this.loadingManager, callback)
   }
 
+  // PATCH[fill-override]: see PATCH-NOTES.md. Lets ZarrLayer forward the
+  // explicit fillValue option so it beats metadata declarations.
+  setConfigFillValue(v: number | null): void {
+    this.configFillValue = v
+  }
+
   getCRS(): CRS {
     return this.crs
   }
@@ -2749,7 +2761,9 @@ export class UntiledMode implements ZarrMode {
     const transforms = {
       scaleFactor: currentLevel?.scaleFactor ?? desc.scaleFactor,
       addOffset: currentLevel?.addOffset ?? desc.addOffset,
-      fillValue: currentLevel?.fillValue ?? desc.fill_value,
+      // PATCH[fill-override]: configFillValue (if set) wins over metadata.
+      fillValue:
+        this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value,
     }
     const sourceBounds: [number, number, number, number] | null = this.xyLimits
       ? [
@@ -3113,7 +3127,9 @@ export class UntiledMode implements ZarrMode {
       const currentLevel = this.levels[level.index]
       scaleFactor = currentLevel?.scaleFactor ?? desc.scaleFactor
       addOffset = currentLevel?.addOffset ?? desc.addOffset
-      fillValue = currentLevel?.fillValue ?? desc.fill_value
+      // PATCH[fill-override]: configFillValue (if set) wins over metadata.
+      fillValue =
+        this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value
     }
 
     console.log(
@@ -3344,7 +3360,9 @@ export class UntiledMode implements ZarrMode {
     const currentLevel = this.levels[level.index]
     const scaleFactor = currentLevel?.scaleFactor ?? desc.scaleFactor
     const addOffset = currentLevel?.addOffset ?? desc.addOffset
-    const fillValue = currentLevel?.fillValue ?? desc.fill_value
+    // PATCH[fill-override]: configFillValue (if set) wins over metadata.
+    const fillValue =
+      this.configFillValue ?? currentLevel?.fillValue ?? desc.fill_value
 
     const strideT = strides[timeOutAxis]
     const strideY = strides[latOutAxis]
