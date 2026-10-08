@@ -7412,6 +7412,7 @@ var UntiledMode = class {
   // explicit fillValue option so it beats metadata declarations.
   setConfigFillValue(v) {
     this.configFillValue = v;
+    console.log("[PATCH fill-override] setConfigFillValue:", v);
   }
   getCRS() {
     return this.crs;

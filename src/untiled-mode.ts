@@ -2443,6 +2443,7 @@ export class UntiledMode implements ZarrMode {
   // explicit fillValue option so it beats metadata declarations.
   setConfigFillValue(v: number | null): void {
     this.configFillValue = v
+    console.log('[PATCH fill-override] setConfigFillValue:', v)
   }
 
   getCRS(): CRS {
