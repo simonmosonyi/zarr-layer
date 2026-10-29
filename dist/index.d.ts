@@ -167,6 +167,14 @@ interface TimeMeanResult {
         x: number;
         y: number;
     };
+    /**
+     * Full pixel dimensions of the coarsest zarr level used for the mean.
+     * Present when a viewport clip is applied (width/height are then the clipped
+     * sub-region size). The renderer uses these to correctly position the
+     * sub-region texture within the full raster coordinate space.
+     */
+    levelWidth?: number;
+    levelHeight?: number;
 }
 /**
  * Result from a time series query at a point.
@@ -369,6 +377,13 @@ declare class ZarrLayer {
         step?: number;
         selector?: Selector;
         signal?: AbortSignal;
+        /** See `ZarrMode.computeTimeMean` for full documentation. */
+        viewportBounds?: {
+            north: number;
+            south: number;
+            east: number;
+            west: number;
+        };
     }): Promise<TimeMeanResult>;
 }
 

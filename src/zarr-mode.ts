@@ -123,6 +123,29 @@ export interface ZarrMode {
     step?: number
     selector?: Selector
     signal?: AbortSignal
+    /**
+     * WGS-84 bounding box of the current map viewport.
+     *
+     * When provided, the spatial dimensions of the zarr array are sliced to
+     * the pixel range that covers this box before the mean is computed.
+     * This dramatically reduces the element count for large global datasets
+     * (e.g. ERA5-Land at full extent would exceed the 100 M element guard,
+     * but a typical viewport covers only a few thousand pixels).
+     *
+     * The bounds are projected from WGS-84 into the dataset's native CRS
+     * using `computePixelBoundsFromGeometry`, which samples multiple points
+     * along each edge to correctly handle curved projections (LCC, LAEA, etc.).
+     * If the projection fails or the viewport does not intersect the dataset,
+     * the spatial clip is silently skipped and the full array is used.
+     *
+     * Coordinates: west/east ∈ [-180, 180], south/north ∈ [-90, 90] (decimal degrees).
+     */
+    viewportBounds?: {
+      north: number
+      south: number
+      east: number
+      west: number
+    }
   }): Promise<TimeMeanResult>
   setTimeMeanData?(result: TimeMeanResult | null): void
 }

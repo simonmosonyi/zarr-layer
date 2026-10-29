@@ -2249,8 +2249,10 @@ export class UntiledMode implements ZarrMode {
         this.timeMeanWidth = r.width
         this.timeMeanHeight = r.height
         this.timeMeanPixelOffset = r.pixelOffset ?? { x: 0, y: 0 }
-        this.timeMeanLevelW = r.width
-        this.timeMeanLevelH = r.height
+        // Use full level dims when available (viewport-clipped result); fall back
+        // to r.width/height for the full-extent case where they are equal anyway.
+        this.timeMeanLevelW = r.levelWidth ?? r.width
+        this.timeMeanLevelH = r.levelHeight ?? r.height
       }
       this.pendingMeanUpdate = false
       this.pendingMeanData = null
@@ -3206,6 +3208,13 @@ export class UntiledMode implements ZarrMode {
     step?: number
     selector?: Selector
     signal?: AbortSignal
+    /** See `ZarrMode.computeTimeMean` for full documentation. */
+    viewportBounds?: {
+      north: number
+      south: number
+      east: number
+      west: number
+    }
   }): Promise<TimeMeanResult> {
     const timeDim = options?.timeDimension ?? 'time'
     const rawStart = options?.start
@@ -3265,16 +3274,54 @@ export class UntiledMode implements ZarrMode {
       ? normalizeSelector(options.selector)
       : this.selector
 
+    // If a viewport bbox is provided, project it from WGS-84 into pixel indices
+    // for the coarsest level so that only the visible area is fetched and averaged.
+    // computePixelBoundsFromGeometry samples multiple edge points to handle curved
+    // projections correctly; null is returned when the viewport misses the dataset.
+    let spatialPixBounds: PixelRect | null = null
+    if (options?.viewportBounds && this.mercatorBounds) {
+      const vb = options.viewportBounds
+      const ring: [number, number][] = [
+        [vb.west, vb.south],
+        [vb.east, vb.south],
+        [vb.east, vb.north],
+        [vb.west, vb.north],
+        [vb.west, vb.south],
+      ]
+      spatialPixBounds = computePixelBoundsFromGeometry(
+        { type: 'Polygon', coordinates: [ring] },
+        this.mercatorBounds,
+        level.width,
+        level.height,
+        this.crs,
+        this.latIsAscending,
+        this.proj4def ?? null,
+        this.xyLimits
+          ? [
+              this.xyLimits.xMin,
+              this.xyLimits.yMin,
+              this.xyLimits.xMax,
+              this.xyLimits.yMax,
+            ]
+          : null
+      )
+    }
+
     const { sliceArgs } = await this.buildSliceArgsForSelector(
       normalizedSelector,
       {
         includeSpatialSlices: true,
         trackMultiValue: false,
         array: level.zarrArray,
+        ...(spatialPixBounds ? { spatialBounds: spatialPixBounds } : {}),
       }
     )
 
-    const pixelOffset = { x: 0, y: 0 }
+    // pixelOffset tells the renderer where in the full raster this tile sits.
+    // Non-zero when a viewport clip is applied; zero for the full-extent case.
+    const pixelOffset = spatialPixBounds
+      ? { x: spatialPixBounds.minX, y: spatialPixBounds.minY }
+      : { x: 0, y: 0 }
 
     // Override the time dim with a slice over [start, end)
     let timeAxisLength = 0
@@ -3311,7 +3358,9 @@ export class UntiledMode implements ZarrMode {
       throw new Error(
         `Time mean requires too many data points (${(
           estimatedElements / 1e6
-        ).toFixed(0)}M). Please specify a date range to limit the computation.`
+        ).toFixed(
+          0
+        )}M). Narrow the date range or enable "Limit to viewport" to reduce the area.`
       )
     }
 
@@ -3399,6 +3448,32 @@ export class UntiledMode implements ZarrMode {
     const meanData = new Float32Array(height * width)
     for (let i = 0; i < meanData.length; i++) {
       meanData[i] = countArr[i] > 0 ? sumArr[i] / countArr[i] : NaN
+    }
+
+    // When a viewport clip was applied the mean covers only a sub-region of
+    // the full raster. The existing renderer maps mean data onto loaded regions
+    // using texOffset/texScale, which breaks when a single region covers the
+    // whole dataset (texOffset goes negative → texture is stretched). To avoid
+    // any rendering changes, pad the clipped result back to the full coarsest
+    // level extent with NaN (transparent); the renderer then sees normal
+    // full-extent data and the positioning logic works without modification.
+    if (spatialPixBounds) {
+      const fullData = new Float32Array(level.width * level.height).fill(NaN)
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          fullData[
+            (y + spatialPixBounds.minY) * level.width +
+              (x + spatialPixBounds.minX)
+          ] = meanData[y * width + x]
+        }
+      }
+      return {
+        variable: this.variables[0],
+        data: fullData,
+        height: level.height,
+        width: level.width,
+        latIsAscending: this.latIsAscending,
+      }
     }
 
     return {

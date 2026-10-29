@@ -973,6 +973,13 @@ export class ZarrLayer {
     step?: number
     selector?: Selector
     signal?: AbortSignal
+    /** See `ZarrMode.computeTimeMean` for full documentation. */
+    viewportBounds?: {
+      north: number
+      south: number
+      east: number
+      west: number
+    }
   }): Promise<TimeMeanResult> {
     if (!this.mode?.computeTimeMean) {
       return {

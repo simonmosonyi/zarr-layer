@@ -11,6 +11,14 @@ export interface TimeMeanResult {
   /** Top-left pixel offset into the full-resolution array. Present when the mean was computed
    *  over a viewport sub-region rather than the full spatial extent. */
   pixelOffset?: { x: number; y: number }
+  /**
+   * Full pixel dimensions of the coarsest zarr level used for the mean.
+   * Present when a viewport clip is applied (width/height are then the clipped
+   * sub-region size). The renderer uses these to correctly position the
+   * sub-region texture within the full raster coordinate space.
+   */
+  levelWidth?: number
+  levelHeight?: number
 }
 
 /**

@@ -7278,8 +7278,8 @@ var UntiledMode = class {
         this.timeMeanWidth = r.width;
         this.timeMeanHeight = r.height;
         this.timeMeanPixelOffset = r.pixelOffset ?? { x: 0, y: 0 };
-        this.timeMeanLevelW = r.width;
-        this.timeMeanLevelH = r.height;
+        this.timeMeanLevelW = r.levelWidth ?? r.width;
+        this.timeMeanLevelH = r.levelHeight ?? r.height;
       }
       this.pendingMeanUpdate = false;
       this.pendingMeanData = null;
@@ -8017,15 +8017,37 @@ var UntiledMode = class {
       height: meanLevelH
     };
     const normalizedSelector = options?.selector ? normalizeSelector(options.selector) : this.selector;
+    let spatialPixBounds = null;
+    if (options?.viewportBounds && this.mercatorBounds) {
+      const vb = options.viewportBounds;
+      const ring = [
+        [vb.west, vb.south],
+        [vb.east, vb.south],
+        [vb.east, vb.north],
+        [vb.west, vb.north],
+        [vb.west, vb.south]
+      ];
+      spatialPixBounds = computePixelBoundsFromGeometry(
+        { type: "Polygon", coordinates: [ring] },
+        this.mercatorBounds,
+        level.width,
+        level.height,
+        this.crs,
+        this.latIsAscending,
+        this.proj4def ?? null,
+        this.xyLimits ? [this.xyLimits.xMin, this.xyLimits.yMin, this.xyLimits.xMax, this.xyLimits.yMax] : null
+      );
+    }
     const { sliceArgs } = await this.buildSliceArgsForSelector(
       normalizedSelector,
       {
         includeSpatialSlices: true,
         trackMultiValue: false,
-        array: level.zarrArray
+        array: level.zarrArray,
+        ...spatialPixBounds ? { spatialBounds: spatialPixBounds } : {}
       }
     );
-    const pixelOffset = { x: 0, y: 0 };
+    const pixelOffset = spatialPixBounds ? { x: spatialPixBounds.minX, y: spatialPixBounds.minY } : { x: 0, y: 0 };
     let timeAxisLength = 0;
     for (const [name, dimInfo] of Object.entries(this.dimIndices)) {
       const dimType = this.classifyDimension(name);
@@ -8048,7 +8070,7 @@ var UntiledMode = class {
     }, 1);
     if (estimatedElements > 1e8) {
       throw new Error(
-        `Time mean requires too many data points (${(estimatedElements / 1e6).toFixed(0)}M). Please specify a date range to limit the computation.`
+        `Time mean requires too many data points (${(estimatedElements / 1e6).toFixed(0)}M). Narrow the date range or enable "Limit to viewport" to reduce the area.`
       );
     }
     const getOpts = options?.signal ? { signal: options.signal } : void 0;
@@ -8111,6 +8133,21 @@ var UntiledMode = class {
     const meanData = new Float32Array(height * width);
     for (let i = 0; i < meanData.length; i++) {
       meanData[i] = countArr[i] > 0 ? sumArr[i] / countArr[i] : NaN;
+    }
+    if (spatialPixBounds) {
+      const fullData = new Float32Array(level.width * level.height).fill(NaN);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          fullData[(y + spatialPixBounds.minY) * level.width + (x + spatialPixBounds.minX)] = meanData[y * width + x];
+        }
+      }
+      return {
+        variable: this.variables[0],
+        data: fullData,
+        height: level.height,
+        width: level.width,
+        latIsAscending: this.latIsAscending
+      };
     }
     return {
       variable: this.variables[0],
